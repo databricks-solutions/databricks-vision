@@ -1,0 +1,11 @@
+# Public PyPI artifact hashes that happen to match secret-scanner regexes.
+# These are SHA-256 hashes of open-source packages, not credentials.
+#
+# Note: the Databricks pre-PUSH hook does not honor .gitleaksignore, only
+# the pre-COMMIT hook does. Inline `# gitleaks:allow` annotations on the
+# offending lines are also required for the pre-push hook to pass.
+#
+# Format: <file>:<rule-id>:<line>
+
+# parso 0.8.7 sdist sha256 starts with "eaaa..." — matches Square access-token regex.
+uv.lock:square-access-token:1082
