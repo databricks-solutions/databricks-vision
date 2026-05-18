@@ -1,0 +1,163 @@
+# Databricks Asset Bundle for the Databricks Vision app.
+#
+# Deploy workflow:
+#   cd databricks-vision
+#   ./scripts/deploy.sh <target> [profile]
+#
+# `target` is one of the entries under `targets:` below.
+# `profile` is the local databricks CLI profile to authenticate with (default: DEFAULT).
+#
+# The deploy.sh script chains: render-app-yml.sh -> bundle deploy -> post-deploy.sh -> bundle run.
+# post-deploy.sh exists because DABs doesn't yet support autoscaling Lakebase resources;
+# it attaches the DB resource, grants the SP schema privileges, and bootstraps the schema.
+
+bundle:
+  name: databricks-vision
+
+# ---------------------------------------------------------------------------
+# Bundle variables. Every target MUST override the per-workspace values
+# (catalog, schema_name, lakebase_*) in `targets.<name>.variables` below.
+# The two endpoint-name variables default to the names used by the bootstrap
+# notebooks; override only if you registered them under different names.
+#
+# Auth model: SP-only. The app's service principal owns all file ops, DB access,
+# and model-serving calls — no OBO is used. New workspaces just need the SP
+# granted USE/READ on the relevant UC catalogs/schemas/volumes after deploy
+# (see DEPLOY.md).
+# ---------------------------------------------------------------------------
+variables:
+  catalog:
+    description: "Unity Catalog catalog name where the app's schema lives."
+  schema_name:
+    description: "Unity Catalog schema for generated_images/vision_images volumes."
+  serving_endpoint_name:
+    description: "Model serving endpoint that serves gpt-image-* (used by the batch job)."
+    default: image-generator
+  embedding_endpoint_name:
+    description: "SigLIP 2 embedding endpoint name (used by the app and batch Phase-2)."
+    default: siglip2-so400m-embeddings
+  lakebase_endpoint:
+    description: "Lakebase Autoscaling endpoint path (projects/.../endpoints/...)."
+  lakebase_branch:
+    description: "Lakebase Autoscaling branch path (projects/.../branches/...) — parent of lakebase_database."
+  lakebase_database:
+    description: "Lakebase Autoscaling database resource path (projects/.../databases/...)."
+  lakebase_db_host:
+    description: "Postgres endpoint hostname for direct psycopg connects in post-deploy."
+
+sync:
+  include:
+    - app/.build
+    - notebooks
+
+artifacts:
+  default:
+    build: cd app && PATH=.bin:$PATH apx build .
+
+# ---------------------------------------------------------------------------
+# Targets. Add one entry per workspace you deploy to. Replace every
+# `<...>` placeholder with the value for that workspace; see DEPLOY.md
+# for how to find each one.
+# ---------------------------------------------------------------------------
+targets:
+
+  dev:
+    mode: development
+    workspace:
+      host: https://<your-workspace>.cloud.databricks.com
+    variables:
+      catalog: <your-catalog>
+      schema_name: <your-schema>
+      lakebase_endpoint: projects/<project>/branches/<branch>/endpoints/<endpoint>
+      lakebase_branch:   projects/<project>/branches/<branch>
+      lakebase_database: projects/<project>/branches/<branch>/databases/<db-id>
+      lakebase_db_host:  ep-<slug>.database.<region>.cloud.databricks.com
+
+resources:
+  apps:
+    databricks-vision-app:
+      name: databricks-vision
+      description: "Databricks Vision — image generation, editing, and gallery"
+      source_code_path: ./app/.build
+      resources:
+        # The base Foundation Models (databricks-gpt-*, gpt-image-*) are queried
+        # via workspace-default routes — no resource binding needed.
+        - name: image-gen-endpoint
+          serving_endpoint:
+            name: ${var.serving_endpoint_name}
+            permission: CAN_QUERY
+        - name: siglip-embedding-endpoint
+          serving_endpoint:
+            name: ${var.embedding_endpoint_name}
+            permission: CAN_QUERY
+        - name: batch-gen-job
+          job:
+            id: ${resources.jobs.batch-image-gen-job.id}
+            permission: CAN_MANAGE_RUN
+        # Project-based autoscaling Lakebase postgres. Uses the `postgres:`
+        # resource shape (branch + database paths); the newer `database:`
+        # AppResource type is for Lakebase Database Instances, a different
+        # model. post-deploy.sh PATCHes the same shape idempotently as a
+        # belt-and-braces guard for older bundle versions.
+        - name: db
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+  jobs:
+    batch-image-gen-job:
+      name: "batch-image-gen-job"
+      parameters:
+        - name: batch_id
+          default: ""
+        - name: batch_mode
+          default: "multi_image"
+        - name: input_volume_path
+          default: ""
+        - name: source_image_path
+          default: ""
+        - name: reference_image_path
+          default: ""
+        - name: prompt_template
+          default: ""
+        - name: variations_json
+          default: "[]"
+        - name: batch_name
+          default: ""
+        - name: created_by
+          default: ""
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema_name
+          default: ${var.schema_name}
+        - name: serving_endpoint_name
+          default: ${var.serving_endpoint_name}
+        - name: lakebase_endpoint
+          default: ${var.lakebase_endpoint}
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "3"
+            dependencies:
+              - "databricks-sdk>=0.100.0"
+              - "psycopg2-binary>=2.9.0"
+      tasks:
+        - task_key: batch_generate
+          environment_key: default
+          max_retries: 0
+          notebook_task:
+            notebook_path: ./notebooks/02_BATCH_GENERATE.py
+            base_parameters:
+              batch_id: "{{job.parameters.batch_id}}"
+              batch_mode: "{{job.parameters.batch_mode}}"
+              input_volume_path: "{{job.parameters.input_volume_path}}"
+              source_image_path: "{{job.parameters.source_image_path}}"
+              reference_image_path: "{{job.parameters.reference_image_path}}"
+              prompt_template: "{{job.parameters.prompt_template}}"
+              variations_json: "{{job.parameters.variations_json}}"
+              batch_name: "{{job.parameters.batch_name}}"
+              catalog: "{{job.parameters.catalog}}"
+              schema_name: "{{job.parameters.schema_name}}"
+              serving_endpoint_name: "{{job.parameters.serving_endpoint_name}}"
+              lakebase_endpoint: "{{job.parameters.lakebase_endpoint}}"

@@ -1,0 +1,14 @@
+command: ["uvicorn", "databricks_vision.backend.app:app", "--workers", "2"]
+env:
+  - name: ENDPOINT_NAME
+    value: "${LAKEBASE_ENDPOINT}"
+  - name: PGDATABASE
+    value: "databricks_postgres"
+  - name: DATABRICKS_VISION_CATALOG
+    value: "${CATALOG}"
+  - name: DATABRICKS_VISION_SCHEMA_NAME
+    value: "${SCHEMA_NAME}"
+  - name: DATABRICKS_VISION_EMBEDDING_ENDPOINT
+    value: "${EMBEDDING_ENDPOINT_NAME}"
+  - name: DATABRICKS_VISION_BATCH_GEN_JOB_ID
+    valueFrom: batch-gen-job

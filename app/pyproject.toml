@@ -1,0 +1,62 @@
+[project]
+name = "databricks-vision"
+dynamic = ["version"]
+description = "Databricks Vision — single image generation/editing and batch workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.119.0",
+    "pydantic-settings>=2.11.0",
+    "uvicorn>=0.37.0",
+    "databricks-sdk>=0.74.0",
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
+    "openai>=2.21.0",
+    "sse-starlette>=2.2.0",
+    "Pillow>=11.0.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.1.0",
+    "python-multipart>=0.0.20",
+    "pgvector>=0.3",
+    # `image_gen.py` is bundled into the wheel via [tool.hatch.build.targets.wheel.force-include]
+    # below; in dev it's installed editable from the repo root via the dev group + uv source.
+]
+
+[dependency-groups]
+dev = ["image-gen"]
+
+[tool.uv.sources]
+image-gen = { path = "..", editable = true }
+
+[tool.apx.metadata]
+app-name = "databricks-vision"
+app-slug = "databricks_vision"
+app-entrypoint = "databricks_vision.backend.app:app"
+api-prefix = "/api"
+metadata-path = "src/databricks_vision/_metadata.py"
+
+[tool.apx.ui]
+root = "src/databricks_vision/ui"
+
+[tool.apx.ui.registries]
+"@animate-ui" = "https://animate-ui.com/r/{name}.json"
+"@ai-elements" = "https://registry.ai-sdk.dev/{name}.json"
+"@svgl" = "https://svgl.app/r/{name}.json"
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+fallback-version = "0.0.0"
+
+[tool.hatch.build]
+artifacts = ["src/databricks_vision/__dist__", "src/databricks_vision/_metadata.py"]
+exclude = ["src/databricks_vision/ui"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../image_gen.py" = "image_gen.py"

@@ -1,0 +1,31 @@
+[project]
+name = "image-gen"
+version = "0.1.0"
+description = "Image generation, analysis, and search foundation for the Databricks Vision repo."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=2.21.0",
+    "pillow",
+    "python-dotenv>=1.2.1",
+    "databricks-sdk>=0.40",
+    "psycopg[binary,pool]>=3.2",
+    "pgvector>=0.3",
+    "matplotlib>=3.9",
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["image_gen.py"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["image_gen.py", "README.md"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+]

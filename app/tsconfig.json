@@ -1,0 +1,32 @@
+{
+    "compilerOptions": {
+      "incremental": true,
+      "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+      "target": "ESNext",
+      "useDefineForClassFields": true,
+      "lib": ["ESNext", "DOM", "DOM.Iterable"],
+      "module": "ESNext",
+      "skipLibCheck": true,
+
+      /* Bundler mode */
+      "moduleResolution": "bundler",
+      "allowImportingTsExtensions": true,
+      "verbatimModuleSyntax": false,
+      "moduleDetection": "force",
+      "noEmit": true,
+      "jsx": "react-jsx",
+
+      /* Linting */
+      "strict": true,
+      "noUnusedLocals": true,
+      "noUnusedParameters": true,
+      "noFallthroughCasesInSwitch": true,
+      "noUncheckedSideEffectImports": true,
+
+      "baseUrl": ".",
+      "paths": {
+        "@/*": ["./src/databricks_vision/ui/*"]
+      }
+    },
+    "include": ["src/databricks_vision/ui", "vite.config.ts", ".apx", "src/databricks_vision/ui/types/vite-env.d.ts"]
+  }
