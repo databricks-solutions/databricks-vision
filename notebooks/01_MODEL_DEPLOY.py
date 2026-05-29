@@ -8,7 +8,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install pillow
+# MAGIC %pip install pillow databricks-openai
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -19,7 +19,6 @@ import pandas as pd
 import requests
 from config import (
     ENDPOINT_NAME,
-    GENERATION_INPUTS_TABLE,
     UC_MODEL_NAME,
 )
 
@@ -76,7 +75,9 @@ signature = ModelSignature(inputs=input_schema, outputs=output_schema)
 # MAGIC %md
 # MAGIC ## Test locally before logging
 # MAGIC
-# MAGIC Quick sanity check with one row from the generation_inputs table.
+# MAGIC Quick sanity check with a synthetic single-row input. Exercises the full
+# MAGIC signature (including the optional tool-param columns) before the expensive
+# MAGIC `log_model` + endpoint deploy steps.
 
 # COMMAND ----------
 
@@ -90,16 +91,28 @@ os.environ["DATABRICKS_HOST"] = host
 
 # COMMAND ----------
 
-sample = spark.sql(
-    f"SELECT input_image_b64, reference_image_b64, prompt FROM {GENERATION_INPUTS_TABLE} LIMIT 1"
-).toPandas()
+# Synthetic single-row input. The pyfunc is edit-mode (requires input_image_b64),
+# so we feed it a tiny solid-grey PNG; the prompt instructs the model to replace it.
+# This burns one image generation API call but validates the full code path before
+# the (slower) endpoint deploy.
+import base64
+from io import BytesIO
+from PIL import Image
 
-# Populate the new optional columns so the local test exercises the full signature.
-sample["size"] = "1024x1024"
-sample["quality"] = "low"
-sample["image_model"] = "gpt-image-2"
-sample["output_format"] = "png"
-sample["background"] = "opaque"
+_buf = BytesIO()
+Image.new("RGB", (256, 256), color=(128, 128, 128)).save(_buf, format="PNG")
+_synthetic_input = base64.b64encode(_buf.getvalue()).decode()
+
+sample = pd.DataFrame([{
+    "input_image_b64": _synthetic_input,
+    "reference_image_b64": "",
+    "prompt": "Replace this image with a red apple on a clean white background, studio photography",
+    "size": "1024x1024",
+    "quality": "low",
+    "image_model": "gpt-image-2",
+    "output_format": "png",
+    "background": "opaque",
+}])
 
 print(f"Testing with prompt: {sample['prompt'].iloc[0][:100]}...")
 
