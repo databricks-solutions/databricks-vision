@@ -79,11 +79,15 @@ In the workspace UI, open `notebooks/00_SIGLIP_DEPLOY.py`. Only two widgets, bot
 
 Run all cells. ~30 minutes for the GPU endpoint to provision. Idempotent on re-run.
 
+> **Running on Databricks Serverless?** Attach the notebook to a **serverless GPU** environment (the local smoke-test cell loads the SigLIP model into memory and a CPU-only env will OOM). Add `transformers` to the environment's dependencies — it isn't in the default serverless base image. On classic ML compute, the GPU runtime ships with `transformers` pre-installed, so neither step is needed.
+
 ### 2e. Deploy the image-generator pyfunc endpoint
 
 Open `notebooks/01_MODEL_DEPLOY.py` and run all cells. ~10 minutes to register the model and deploy the `image-generator` endpoint.
 
 The notebook includes a **local smoke-test cell** that builds an inline 256×256 PNG and calls `model.predict` once. This burns a single image-generation API call but exercises the full edit-mode code path before the (slower) endpoint deploy. Skip the smoke-test cells if you'd rather not pay for that one call — the signature is defined declaratively and the deploy works without them.
+
+> **Running on Databricks Serverless?** Regular (non-GPU) serverless is fine. Add `mlflow` to the environment's dependencies — it isn't in the default serverless base image. The notebook's own `%pip install` cell handles the rest. On classic ML compute, `mlflow` is pre-installed.
 
 ---
 
