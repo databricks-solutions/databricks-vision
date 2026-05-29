@@ -59,31 +59,35 @@ CREATE VOLUME  IF NOT EXISTS <catalog>.<schema>.vision_images;
 
 The volume names are fixed; only catalog/schema vary.
 
-### 2c. Deploy the SigLIP 2 embedding endpoint
+### 2c. Edit `notebooks/config.py`
 
-In the workspace UI, open `notebooks/00_SIGLIP_DEPLOY.py` (sync the repo via *Repos* or copy the file in). Set widgets:
+Both bootstrap notebooks read `CATALOG` and `SCHEMA` from `notebooks/config.py`. Open it and replace the placeholders with the catalog/schema you created in step 2b:
+
+```python
+CATALOG = "<your-catalog>"
+SCHEMA  = "<your-schema>"
+```
+
+### 2d. Deploy the SigLIP 2 embedding endpoint
+
+In the workspace UI, open `notebooks/00_SIGLIP_DEPLOY.py`. Only two widgets, both with sensible defaults:
 
 | Widget          | Value                                                                           |
 | --------------- | ------------------------------------------------------------------------------- |
-| `catalog`       | your `<catalog>`                                                                |
-| `schema`        | your `<schema>`                                                                 |
 | `endpoint_name` | `siglip2-so400m-embeddings` (default; change only on a name collision)          |
 | `hf_model_id`   | `google/siglip2-so400m-patch14-384` (default)                                   |
 
 Run all cells. ~30 minutes for the GPU endpoint to provision. Idempotent on re-run.
 
-### 2d. Deploy the image-generator pyfunc endpoint
+> **Running on Databricks Serverless?** Attach the notebook to a **serverless GPU** environment (the local smoke-test cell loads the SigLIP model into memory and a CPU-only env will OOM). Add `transformers` to the environment's dependencies — it isn't in the default serverless base image. On classic ML compute, the GPU runtime ships with `transformers` pre-installed, so neither step is needed.
 
-Open `notebooks/01_MODEL_DEPLOY.py`.
+### 2e. Deploy the image-generator pyfunc endpoint
 
-**Before running**, edit `notebooks/config.py` so `CATALOG` and `SCHEMA` match your workspace. (This notebook does not yet use widgets.)
+Open `notebooks/01_MODEL_DEPLOY.py` and run all cells. ~10 minutes to register the model and deploy the `image-generator` endpoint.
 
-The notebook contains a **local smoke-test cell** that reads one row from `<catalog>.<schema>.generation_inputs`. In a fresh workspace that table doesn't exist, so the cell fails. Two ways to handle it:
+The notebook includes a **local smoke-test cell** that builds an inline 256×256 PNG and calls `model.predict` once. This burns a single image-generation API call but exercises the full edit-mode code path before the (slower) endpoint deploy. Skip the smoke-test cells if you'd rather not pay for that one call — the signature is defined declaratively and the deploy works without them.
 
-- **Easiest:** skip the smoke-test cells (the SQL read, the local `model.predict(...)`, and the "Display test result" cell). The signature is defined declaratively; the deploy works without them.
-- **Or** replace the SQL read with a synthetic sample (a 256×256 PNG you base64-encode inline). This actually exercises the endpoint end-to-end and burns one image generation.
-
-Run the remaining cells. ~10 minutes to register and deploy the `image-generator` endpoint.
+> **Running on Databricks Serverless?** Regular (non-GPU) serverless is fine. Add `mlflow` to the environment's dependencies — it isn't in the default serverless base image. The notebook's own `%pip install` cell handles the rest. On classic ML compute, `mlflow` is pre-installed.
 
 ---
 

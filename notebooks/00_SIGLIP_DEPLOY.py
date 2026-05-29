@@ -20,18 +20,18 @@
 # MAGIC %md
 # MAGIC ## Parameters
 # MAGIC
-# MAGIC Override these in the workspace UI (Widgets panel) or via job parameters.
-# MAGIC `catalog` and `schema` have no default — supply them before running.
+# MAGIC `catalog` and `schema` come from `config.py` (edit there before running).
+# MAGIC `endpoint_name` and `hf_model_id` can be overridden via widgets / job params.
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "", "Catalog")
-dbutils.widgets.text("schema", "", "Schema")
+from config import CATALOG, SCHEMA
+
 dbutils.widgets.text("endpoint_name", "siglip2-so400m-embeddings", "Endpoint Name")
 dbutils.widgets.text("hf_model_id", "google/siglip2-so400m-patch14-384", "HF Model ID")
 
-catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
+catalog = CATALOG
+schema = SCHEMA
 endpoint_name = dbutils.widgets.get("endpoint_name")
 hf_model_id = dbutils.widgets.get("hf_model_id")
 
@@ -50,9 +50,10 @@ print(f"HF model:           {hf_model_id}")
 
 # COMMAND ----------
 
-# Re-read widgets — restartPython clears state
-catalog = dbutils.widgets.get("catalog")
-schema = dbutils.widgets.get("schema")
+# Re-import / re-read — restartPython clears module state
+from config import CATALOG, SCHEMA
+catalog = CATALOG
+schema = SCHEMA
 endpoint_name = dbutils.widgets.get("endpoint_name")
 hf_model_id = dbutils.widgets.get("hf_model_id")
 model_name = "siglip2_so400m_embeddings"
