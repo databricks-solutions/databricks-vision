@@ -32,7 +32,7 @@ image-gen = { path = "..", editable = true }
 [tool.apx.metadata]
 app-name = "databricks-vision"
 app-slug = "databricks_vision"
-app-entrypoint = "databricks_vision.backend.app:app"
+app-module = "databricks_vision.backend.app:app"
 api-prefix = "/api"
 metadata-path = "src/databricks_vision/_metadata.py"
 

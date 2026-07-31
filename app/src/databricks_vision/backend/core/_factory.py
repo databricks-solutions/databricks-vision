@@ -6,9 +6,9 @@ from functools import lru_cache
 
 from fastapi import APIRouter, FastAPI
 
-from ..._metadata import api_prefix, app_name, dist_dir
+from ..._metadata import api_prefix, app_name
 from ._base import LifespanDependency
-from ._config import logger
+from ._config import dist_dir, logger
 
 
 @asynccontextmanager

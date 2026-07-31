@@ -10,8 +10,8 @@ from starlette.responses import Response
 from starlette.staticfiles import NotModifiedResponse, StaticFiles
 from starlette.types import Scope
 
-from ..._metadata import api_prefix, dist_dir
-from ._config import logger
+from ..._metadata import api_prefix
+from ._config import dist_dir, logger
 
 
 class CachedStaticFiles(StaticFiles):
