@@ -24,6 +24,7 @@ SUMMARY=$(databricks bundle summary -t "$TARGET" -p "$PROFILE" -o json)
 LAKEBASE_ENDPOINT_PATH=$(jq -er '.variables.lakebase_endpoint.value' <<<"$SUMMARY")
 LAKEBASE_DATABASE_PATH=$(jq -er '.variables.lakebase_database.value' <<<"$SUMMARY")
 DB_HOST=$(jq -er '.variables.lakebase_db_host.value' <<<"$SUMMARY")
+EVAL_EXPERIMENT=$(jq -er '.variables.eval_experiment.value' <<<"$SUMMARY")
 
 # Derive the branch path (everything before /databases/...) for the postgres resource payload.
 BRANCH_PATH=$(echo "$LAKEBASE_DATABASE_PATH" | sed 's|/databases/.*||')
@@ -173,5 +174,50 @@ with conn.cursor() as cur:
 conn.close()
 print('  Table permissions ensured')
 " 2>&1 | grep -v "^warning:"
+
+# --- Step 5: Ensure the MLflow eval experiment exists + app SP can write to it ---
+echo "5/5 Ensuring MLflow eval experiment ($EVAL_EXPERIMENT) + SP permission..."
+
+python3 - "$HOST" "$TOKEN" "$EVAL_EXPERIMENT" "$SP_CLIENT_ID" <<'PY' 2>&1 | grep -v "^warning:" || true
+import json, sys, urllib.request
+
+host, token, experiment, sp = sys.argv[1:5]
+
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(host.rstrip("/") + path, data=data, method=method,
+                                headers={"Authorization": f"Bearer {token}",
+                                         "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode()
+        # get-by-name 404s (RESOURCE_DOES_NOT_EXIST) are expected; surface others.
+        return {"_http_error": e.code, "_detail": detail}
+
+# get-or-create the experiment
+exp = api("GET", f"/api/2.0/mlflow/experiments/get-by-name?experiment_name={experiment}")
+exp_id = exp.get("experiment", {}).get("experiment_id") if isinstance(exp, dict) else None
+if not exp_id:
+    created = api("POST", "/api/2.0/mlflow/experiments/create", {"name": experiment})
+    exp_id = created.get("experiment_id")
+    if exp_id:
+        print(f"  Created experiment {experiment} (id={exp_id})")
+    else:
+        print(f"  WARN: could not create experiment: {created}")
+        sys.exit(0)
+else:
+    print(f"  Experiment exists (id={exp_id})")
+
+# grant the app SP CAN_EDIT via the permissions API (PATCH = additive)
+perm = api("PATCH", f"/api/2.0/permissions/experiments/{exp_id}",
+           {"access_control_list": [
+               {"service_principal_name": sp, "permission_level": "CAN_EDIT"}]})
+if perm.get("_http_error"):
+    print(f"  WARN: could not set SP permission: {perm['_http_error']} {perm.get('_detail','')[:200]}")
+else:
+    print(f"  Granted CAN_EDIT on experiment {exp_id} to SP {sp}")
+PY
 
 echo "Done."

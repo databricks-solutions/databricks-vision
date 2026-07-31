@@ -36,6 +36,20 @@ def _pg_execute(pool: ConnectionPool, sql: str, params: tuple = ()) -> None:
         conn.commit()
 
 
+async def _score_or_analyze(request: Request, analyzer, image_bytes: bytes, prompt, criteria=None):
+    """Score an image, preferring the MLflow ImageEvaluator (traced + make_judge scoring),
+    falling back to the plain structured analyzer when eval is disabled or the judges fail.
+    Returns an ImageAnalysis. Used by the backfill / analyze / import endpoints."""
+    evaluator = getattr(request.app.state, "image_evaluator", None)
+    if evaluator is not None:
+        try:
+            return await evaluator.score_image(analyzer, image_bytes, prompt or "", criteria)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("MLflow eval failed; falling back to analyzer: %s", exc)
+    return await analyzer.analyze(image_bytes, gen_prompt=prompt, criteria=criteria)
+
+
 # --- Images (unified: batch + single) ---
 
 _GALLERY_SELECT = """
@@ -273,6 +287,110 @@ def delete_folder(name: str, db: Dependencies.DB, ws: Dependencies.UserClient):
     }
 
 
+@router.post("/gallery/{batch_id}/evaluate", operation_id="evaluateBatch")
+async def evaluate_batch(request: Request, batch_id: str):
+    """On-demand MLflow evaluation of a whole batch.
+
+    Runs the make_judge {{ trace }} scorers over every successful image in the batch under a
+    single named MLflow run, so the experiment UI shows per-dimension aggregates and lets you
+    compare batches / prompt versions. Judge scores are mirrored back into the same
+    generated_images columns the gallery reads (so the UI is unchanged), and streams progress
+    over SSE. Requires MLflow eval to be enabled (app.state.image_evaluator)."""
+    pool: ConnectionPool = request.app.state.db_pool
+    if not pool:
+        raise HTTPException(500, "Database not available")
+
+    evaluator = getattr(request.app.state, "image_evaluator", None)
+    if evaluator is None:
+        raise HTTPException(409, "MLflow evaluation is not enabled on this deployment")
+
+    cfg = request.app.state.config
+    vw = request.app.state.vision_workspace
+    ws = request.app.state.workspace_client
+    token = get_sp_token(request)
+    openai_client = vw.openai_for_token(token) if token else vw.openai
+    analyzer = ImageAnalyzer(workspace=vw, model=cfg.model_name, openai_client=openai_client)
+
+    rows = _pg_fetch(
+        pool,
+        """SELECT batch_id, id, prompt, volume_path
+           FROM generated_images
+           WHERE batch_id = %s AND status = 'success' AND volume_path IS NOT NULL""",
+        (batch_id,),
+    )
+    if not rows:
+        raise HTTPException(404, "No evaluable images in this batch")
+
+    async def event_generator():
+        import logging
+        import mlflow
+
+        log = logging.getLogger(__name__)
+        total = len(rows)
+        done = 0
+
+        # One MLflow run groups the whole batch's traces + feedback for comparison.
+        run_ctx = None
+        try:
+            run_ctx = mlflow.start_run(run_name=f"batch-eval-{batch_id}")
+            run_ctx.__enter__()
+        except Exception as exc:
+            log.warning("Could not start MLflow run for batch %s: %s", batch_id, exc)
+
+        try:
+            for row in rows:
+                try:
+                    image_bytes = ws.files.download(row["volume_path"]).contents.read()
+                    analysis = await evaluator.score_image(
+                        analyzer, image_bytes, row.get("prompt") or "",
+                    )
+                    _pg_execute(
+                        pool,
+                        """UPDATE generated_images SET
+                              description = %s, tags = %s::jsonb,
+                              evaluation = %s, metrics = %s::jsonb,
+                              missing_elements = %s::jsonb, safety_flags = %s::jsonb,
+                              brand_conflicts = %s::jsonb, improved_prompt = %s,
+                              criteria_evaluation = %s
+                           WHERE batch_id = %s AND id = %s""",
+                        (
+                            analysis.description, json.dumps(analysis.tags),
+                            analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                            json.dumps(analysis.missing_or_wrong_elements),
+                            json.dumps(analysis.safety_flags),
+                            json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
+                            analysis.criteria_evaluation, row["batch_id"], row["id"],
+                        ),
+                    )
+                    done += 1
+                    yield {"event": "progress", "data": json.dumps({
+                        "evaluated": done, "total": total, "current_id": row["id"],
+                        "metrics": analysis.metrics.model_dump(),
+                    })}
+                except Exception as e:
+                    log.error("Batch eval failed for %s/%s: %s", batch_id, row["id"], e, exc_info=True)
+                    done += 1
+                    yield {"event": "progress", "data": json.dumps({
+                        "evaluated": done, "total": total, "current_id": row["id"], "error": str(e),
+                    })}
+        finally:
+            run_id = None
+            if run_ctx is not None:
+                try:
+                    run_id = run_ctx.info.run_id
+                except Exception:
+                    pass
+                try:
+                    run_ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+            yield {"event": "complete", "data": json.dumps({
+                "evaluated": done, "total": total, "run_id": run_id,
+            })}
+
+    return EventSourceResponse(event_generator())
+
+
 @router.post("/gallery/analyze", operation_id="analyzeGalleryImages")
 async def analyze_images(
     request: Request,
@@ -321,7 +439,7 @@ async def analyze_images(
                 resp = ws.files.download(volume_path)
                 image_bytes = resp.contents.read()
 
-                analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=row.get("prompt")))
+                analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
                 embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
                 analysis = await analyze_task
                 try:
@@ -437,7 +555,7 @@ async def analyze_single_image(
     except Exception as exc:
         raise HTTPException(500, f"Failed to download image: {exc}") from exc
 
-    analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=row.get("prompt")))
+    analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
     embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
 
     analysis = embedding = None
@@ -589,7 +707,7 @@ async def _import_one_phase2(
             prompt = filename_stem  # last-resort fallback so the row has *something*
 
         analyzer = ImageAnalyzer(workspace=vw, model=cfg.model_name, openai_client=oai)
-        analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=prompt))
+        analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, prompt))
         embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
         analysis = embedding = None
         try:

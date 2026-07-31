@@ -17,6 +17,7 @@ export LAKEBASE_ENDPOINT=$(jq -er '.variables.lakebase_endpoint.value' <<<"$SUMM
 export CATALOG=$(jq -er '.variables.catalog.value' <<<"$SUMMARY")
 export SCHEMA_NAME=$(jq -er '.variables.schema_name.value' <<<"$SUMMARY")
 export EMBEDDING_ENDPOINT_NAME=$(jq -er '.variables.embedding_endpoint_name.value' <<<"$SUMMARY")
+export EVAL_EXPERIMENT=$(jq -er '.variables.eval_experiment.value' <<<"$SUMMARY")
 
 envsubst < app/app.yml.template > app/app.yml
 echo "  Rendered app/app.yml for target=$TARGET"
