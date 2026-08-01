@@ -229,7 +229,9 @@ class ImageEvaluator:
 
         # Fetch the exported trace: get_span_image reads mlflow-attachment:// tokens that are
         # only present post-export, so judging the fetched trace (not the live one) is required.
-        trace = await asyncio.to_thread(mlflow.get_trace, trace_id)
+        # flush=True forces pending async trace writes to complete first — without it the trace
+        # comes back unflushed/corrupted and the judges raise "Must specify 'trace'".
+        trace = await asyncio.to_thread(lambda: mlflow.get_trace(trace_id, flush=True))
         judge_inputs = self._judge_inputs(prompt, criteria)
 
         active = ["prompt_adherence", "visual_quality", "safe_content"]
