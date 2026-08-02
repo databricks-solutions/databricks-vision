@@ -46,6 +46,15 @@ def setup_mlflow(experiment: str) -> None:
 
     Auth flows through the ambient databricks-sdk unified auth (the app SP inside a Databricks
     App). Safe to call once at startup. Raises on failure — the caller guards it.
+
+    IMPORTANT (Databricks Apps + MLflow trace attachments): the experiment named here MUST be
+    created with `artifact_location` pointing at a UC Volume (see scripts/post-deploy.sh).
+    MLflow uploads trace *attachments* (the image get_span_image fetches) to the experiment's
+    artifact store; the default store is the regional blob proxy (*.storage.cloud.databricks.com),
+    which serverless/Apps compute cannot reach (internet-zone signed URL → Connection refused).
+    A UC Volume artifact location is served via the workspace/UC path the app *can* reach, so
+    attachment upload + get_span_image both work. (Ref: FEVM-391 — verified fix for this
+    workspace family; opening egress is a no-op because the proxy is unreachable by design.)
     """
     import mlflow
 
@@ -227,11 +236,16 @@ class ImageEvaluator:
             analyzer, image_bytes, eval_uri, prompt, criteria
         )
 
-        # Fetch the exported trace: get_span_image reads mlflow-attachment:// tokens that are
-        # only present post-export, so judging the fetched trace (not the live one) is required.
-        # flush=True forces pending async trace writes to complete first — without it the trace
-        # comes back unflushed/corrupted and the judges raise "Must specify 'trace'".
-        trace = await asyncio.to_thread(lambda: mlflow.get_trace(trace_id, flush=True))
+        # Force BOTH async export queues to drain before judging: spans (so the trace exists)
+        # and artifacts (so the image ATTACHMENT bytes are uploaded). Without the artifact
+        # flush, get_span_image races the upload and hits "Trace data is corrupted", so the
+        # {{ trace }} visual judge can't retrieve the image. Order matters: flush, then fetch.
+        def _flush_and_fetch():
+            mlflow.flush_trace_async_logging()
+            mlflow.flush_artifact_async_logging()
+            return mlflow.get_trace(trace_id, flush=True)
+
+        trace = await asyncio.to_thread(_flush_and_fetch)
         judge_inputs = self._judge_inputs(prompt, criteria)
 
         active = ["prompt_adherence", "visual_quality", "safe_content"]

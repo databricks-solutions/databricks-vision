@@ -119,6 +119,8 @@ class _ImageGenDependency(LifespanDependency):
             try:
                 from ._eval import ImageEvaluator, build_judges, setup_mlflow
 
+                # The experiment is created (in post-deploy) with artifact_location on a UC
+                # Volume so trace attachments land on a path the App can reach. See setup_mlflow.
                 setup_mlflow(cfg.eval_experiment)
                 judges = build_judges(cfg.judge_model, cfg.judge_reasoning_effort)
                 app.state.image_evaluator = ImageEvaluator(judges, cfg)
