@@ -18,12 +18,16 @@ import {
 import { Copy, Download, Edit3, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-export type ImageMetrics = {
+// The five numeric metric dimensions.
+export type MetricScores = {
   quality: number;
   prompt_adherence: number;
   purpose_fit: number;
   text_legibility: number;
   safe_content: number;
+};
+
+export type ImageMetrics = MetricScores & {
   // Per-dimension judge rationales (keyed by metric key), nested by the backend under
   // metrics._rationales. Present only when MLflow judges ran; shown as a hover tooltip.
   _rationales?: Record<string, string>;
@@ -54,7 +58,7 @@ export type ImageDialogImage = {
   criteria_evaluation?: string | null;
 };
 
-const METRIC_LABELS: { key: keyof ImageMetrics; label: string }[] = [
+const METRIC_LABELS: { key: keyof MetricScores; label: string }[] = [
   { key: "quality", label: "Quality" },
   { key: "prompt_adherence", label: "Prompt" },
   { key: "purpose_fit", label: "Purpose" },
@@ -267,31 +271,17 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                 </div>
               )}
               {image.metrics && (() => {
-                // Once the analyzer has run (image.metrics populated), always render
-                // Issues found and Suggested improved prompt so the layout stays
-                // consistent — empty states render a muted "none" message inside.
-                const missing = image.missing_elements ?? [];
+                // The 5 scores (with per-dimension hover rationales) convey what's weak, so
+                // there's no separate "issues" list. We surface only: (a) an improved prompt —
+                // the backend guarantees one whenever a dimension scored weak (see
+                // ImageEvaluator.score_image), and (b) genuine safety/brand flags, shown inline
+                // only when present (these aren't captured by the numeric scores).
                 const safety = image.safety_flags ?? [];
                 const brand = image.brand_conflicts ?? [];
-                const totalIssues = missing.length + safety.length + brand.length;
                 return (
                   <>
-                    <details className="text-xs">
-                      <summary className="font-medium text-muted-foreground cursor-pointer hover:text-foreground">
-                        Issues found ({totalIssues})
-                      </summary>
-                      <div className="mt-1.5 space-y-1.5 pl-2 border-l-2 border-border">
-                        {totalIssues === 0 && (
-                          <p className="text-muted-foreground italic">No issues detected.</p>
-                        )}
-                        {missing.length > 0 && (
-                          <div>
-                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Missing or wrong</p>
-                            <ul className="list-disc list-inside text-foreground">
-                              {missing.map((s, i) => <li key={i}>{s}</li>)}
-                            </ul>
-                          </div>
-                        )}
+                    {(safety.length > 0 || brand.length > 0) && (
+                      <div className="text-xs rounded-md border border-red-500/30 bg-red-500/5 p-2 space-y-1">
                         {safety.length > 0 && (
                           <div>
                             <p className="text-[10px] uppercase tracking-wide text-red-600 dark:text-red-400">Safety</p>
@@ -302,34 +292,30 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                         )}
                         {brand.length > 0 && (
                           <div>
-                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Brand conflicts</p>
+                            <p className="text-[10px] uppercase tracking-wide text-red-600 dark:text-red-400">Brand conflicts</p>
                             <ul className="list-disc list-inside text-foreground">
                               {brand.map((s, i) => <li key={i}>{s}</li>)}
                             </ul>
                           </div>
                         )}
                       </div>
-                    </details>
-                    <details className="text-xs">
-                      <summary className="font-medium text-muted-foreground cursor-pointer hover:text-foreground">
-                        Suggested improved prompt
-                      </summary>
-                      <div className="mt-1.5 rounded-md border border-blue-500/30 bg-blue-500/5 p-2 text-foreground space-y-1.5">
-                        {image.improved_prompt ? (
-                          <>
-                            <p className="leading-snug">{image.improved_prompt}</p>
-                            <button
-                              className="inline-flex items-center gap-1 text-[11px] text-blue-700 dark:text-blue-400 hover:underline"
-                              onClick={() => { navigator.clipboard.writeText(image.improved_prompt!); toast.success("Improved prompt copied"); }}
-                            >
-                              <Copy className="h-3 w-3" /> Copy
-                            </button>
-                          </>
-                        ) : (
-                          <p className="text-muted-foreground italic">No improvements suggested.</p>
-                        )}
-                      </div>
-                    </details>
+                    )}
+                    {image.improved_prompt && (
+                      <details className="text-xs" open>
+                        <summary className="font-medium text-muted-foreground cursor-pointer hover:text-foreground">
+                          Improved prompt
+                        </summary>
+                        <div className="mt-1.5 rounded-md border border-blue-500/30 bg-blue-500/5 p-2 text-foreground space-y-1.5">
+                          <p className="leading-snug">{image.improved_prompt}</p>
+                          <button
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-700 dark:text-blue-400 hover:underline"
+                            onClick={() => { navigator.clipboard.writeText(image.improved_prompt!); toast.success("Improved prompt copied"); }}
+                          >
+                            <Copy className="h-3 w-3" /> Copy
+                          </button>
+                        </div>
+                      </details>
+                    )}
                   </>
                 );
               })()}

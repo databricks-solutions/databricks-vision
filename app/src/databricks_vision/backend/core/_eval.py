@@ -309,7 +309,23 @@ class ImageEvaluator:
             except Exception as exc:
                 logger.warning("log_feedback(%s) failed: %s", name, exc)
 
-        return self._merge(analysis, feedbacks)
+        merged = self._merge(analysis, feedbacks)
+
+        # Rule: anything with issues gets an improved prompt. The structured analyzer only
+        # returns a rewrite for images it deems clearly off-spec, so a middling image (a weak
+        # judge score but no analyzer rewrite) would otherwise show none. When judges flag a
+        # weak dimension and there's no rewrite yet, generate a real one grounded in the weak
+        # dimensions + their rationales. Non-fatal: on any failure we just leave it unset.
+        weak = self._weak_dimensions(merged)
+        if weak and not merged.improved_prompt:
+            try:
+                merged.improved_prompt = await self._generate_improved_prompt(
+                    analyzer, prompt, weak, criteria,
+                )
+            except Exception as exc:
+                logger.warning("improved-prompt generation failed: %s", exc)
+
+        return merged
 
     @staticmethod
     def _score(fb) -> int | None:
@@ -392,3 +408,45 @@ class ImageEvaluator:
             analysis.criteria_evaluation = crit.rationale
 
         return analysis
+
+    # A metric below this (matches the gallery's green threshold) counts as a weak dimension
+    # worth an improved-prompt suggestion.
+    _WEAK_THRESHOLD = 4
+
+    def _weak_dimensions(self, analysis: "ImageAnalysis") -> list[tuple[str, int, str]]:
+        """Return [(label, score, rationale)] for metric dimensions scoring below threshold,
+        using the judge rationales captured on the analysis. Drives improved-prompt generation."""
+        labels = {
+            "quality": "visual quality", "prompt_adherence": "prompt adherence",
+            "purpose_fit": "purpose fit", "text_legibility": "text legibility",
+            "safe_content": "safe content",
+        }
+        rationales = getattr(analysis, "metric_rationales", {}) or {}
+        m = analysis.metrics.model_dump()
+        out = []
+        for key, label in labels.items():
+            score = m.get(key)
+            if isinstance(score, int) and score < self._WEAK_THRESHOLD:
+                out.append((label, score, rationales.get(key, "")))
+        return out
+
+    async def _generate_improved_prompt(
+        self, analyzer: "ImageAnalyzer", prompt: str,
+        weak: list[tuple[str, int, str]], criteria: str | None,
+    ) -> str | None:
+        """Generate a concrete rewritten generation prompt that addresses the weak dimensions.
+        Uses the analyzer's own OpenAI client/model (a plain text completion — no image needed;
+        the weak-dimension rationales already describe what to fix)."""
+        weak_lines = "\n".join(f"- {label} scored {score}/5: {rat}" for label, score, rat in weak)
+        crit_line = f"\nEvaluation criteria to honor:\n{criteria}\n" if criteria else ""
+        instruction = (
+            "You rewrite text-to-image generation prompts to fix specific weaknesses.\n"
+            f"Original prompt:\n{prompt}\n{crit_line}\n"
+            f"An evaluator scored the generated image and flagged these weak areas:\n{weak_lines}\n\n"
+            "Rewrite the original prompt so a new generation would score better on those areas. "
+            "Keep the original intent and subject; add only concrete, visual specifics that "
+            "address the weaknesses. Return ONLY the rewritten prompt text, nothing else."
+        )
+        resp = await analyzer.client.responses.create(model=analyzer.model, input=instruction)
+        text = (resp.output_text or "").strip()
+        return text or None
