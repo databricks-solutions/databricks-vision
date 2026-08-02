@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,21 @@ if TYPE_CHECKING:
     from image_gen import ImageAnalysis, ImageAnalyzer
 
     from ._config import AppConfig
+
+
+def metrics_json(analysis: "ImageAnalysis") -> str:
+    """Serialize an ImageAnalysis's metrics to the JSON string stored in
+    `generated_images.metrics`, nesting per-dimension judge rationales under `_rationales`
+    when present (set by ImageEvaluator._merge; absent on the structured-analyzer fallback).
+
+    The gallery reads `metrics._rationales[<metric key>]` to show a hover tooltip per metric
+    cell. Use this everywhere the metrics column is written so the shape stays consistent.
+    """
+    m = analysis.metrics.model_dump()
+    rationales = getattr(analysis, "metric_rationales", None)
+    if rationales:
+        m["_rationales"] = rationales
+    return json.dumps(m)
 
 
 # --- MLflow setup -----------------------------------------------------------
@@ -310,10 +326,36 @@ class ImageEvaluator:
                 return None
         return None
 
+    # Judge name -> the metrics-dict key it scores. `visual_quality` maps to `quality`.
+    _JUDGE_TO_METRIC = {
+        "prompt_adherence": "prompt_adherence",
+        "visual_quality": "quality",
+        "safe_content": "safe_content",
+        "purpose_fit": "purpose_fit",
+        "text_legibility": "text_legibility",
+    }
+
     def _merge(self, analysis: "ImageAnalysis", feedbacks: dict) -> "ImageAnalysis":
         """Overwrite the scoring fields on `analysis` with judge values, keeping the enrichment
         fields (description, tags, missing_or_wrong_elements, improved_prompt, criteria_evaluation)
-        from the structured call. Mutates and returns `analysis`."""
+        from the structured call. Mutates and returns `analysis`.
+
+        Also collects each metric judge's rationale, keyed by metric-dict key, onto
+        `analysis.metric_rationales` so the write path can nest them in the metrics JSONB
+        (surfaced as per-cell hover tooltips in the gallery). See `metrics_json`.
+        """
+        # Capture the per-dimension rationales for every metric judge that returned one.
+        rationales: dict[str, str] = {}
+        for judge_name, metric_key in self._JUDGE_TO_METRIC.items():
+            fb = feedbacks.get(judge_name)
+            rat = getattr(fb, "rationale", None) if fb is not None else None
+            if rat:
+                rationales[metric_key] = rat
+        # ImageAnalysis is a Pydantic v2 model that rejects normal attribute assignment for
+        # non-fields; object.__setattr__ stashes the rationales without touching the shared
+        # image_gen.py schema. metrics_json() reads it back via getattr.
+        object.__setattr__(analysis, "metric_rationales", rationales)
+
         pa = feedbacks.get("prompt_adherence")
         vq = feedbacks.get("visual_quality")
         sc = feedbacks.get("safe_content")

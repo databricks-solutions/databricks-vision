@@ -24,6 +24,9 @@ export type ImageMetrics = {
   purpose_fit: number;
   text_legibility: number;
   safe_content: number;
+  // Per-dimension judge rationales (keyed by metric key), nested by the backend under
+  // metrics._rationales. Present only when MLflow judges ran; shown as a hover tooltip.
+  _rationales?: Record<string, string>;
 };
 
 export type ImageDialogImage = {
@@ -245,8 +248,13 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                   <div className="grid grid-cols-5 gap-1 mb-2">
                     {METRIC_LABELS.map(({ key, label }) => {
                       const score = image.metrics?.[key] ?? 0;
+                      const rationale = image.metrics?._rationales?.[key];
                       return (
-                        <div key={key} className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 ${metricColor(score)}`} title={`${label}: ${score}/5`}>
+                        <div
+                          key={key}
+                          className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 ${metricColor(score)} ${rationale ? "cursor-help" : ""}`}
+                          title={rationale ? `${label}: ${score}/5\n\n${rationale}` : `${label}: ${score}/5`}
+                        >
                           <span className="text-[10px] font-medium uppercase tracking-wide leading-none">{label}</span>
                           <span className="text-sm font-semibold leading-none">{score}</span>
                         </div>

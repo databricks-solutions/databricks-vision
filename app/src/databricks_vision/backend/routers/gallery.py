@@ -15,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..core import Dependencies
 from ..core._background import spawn_bg
+from ..core._eval import metrics_json
 from ..core._image_gen_dep import get_sp_token
 from ..models import FolderCreate, FolderOut, GeneratedImageOut
 
@@ -355,7 +356,7 @@ async def evaluate_batch(request: Request, batch_id: str):
                            WHERE batch_id = %s AND id = %s""",
                         (
                             analysis.description, json.dumps(analysis.tags),
-                            analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                            analysis.evaluation, metrics_json(analysis),
                             json.dumps(analysis.missing_or_wrong_elements),
                             json.dumps(analysis.safety_flags),
                             json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
@@ -454,7 +455,6 @@ async def analyze_images(
                 thumbnail_path = f"{thumb_dir}/thumb_{row['id']}.webp"
                 ws.files.upload(thumbnail_path, BytesIO(thumbnail_bytes), overwrite=True)
 
-                metrics_json = json.dumps(analysis.metrics.model_dump())
                 _pg_execute(
                     pool,
                     """UPDATE generated_images SET
@@ -475,7 +475,7 @@ async def analyze_images(
                         json.dumps(analysis.tags),
                         thumbnail_path,
                         analysis.evaluation,
-                        metrics_json,
+                        metrics_json(analysis),
                         json.dumps(analysis.missing_or_wrong_elements),
                         json.dumps(analysis.safety_flags),
                         json.dumps(analysis.brand_conflicts),
@@ -587,7 +587,7 @@ async def analyze_single_image(
             analysis.description,
             json.dumps(analysis.tags),
             analysis.evaluation,
-            json.dumps(analysis.metrics.model_dump()),
+            metrics_json(analysis),
             json.dumps(analysis.missing_or_wrong_elements),
             json.dumps(analysis.safety_flags),
             json.dumps(analysis.brand_conflicts),
@@ -731,7 +731,7 @@ async def _import_one_phase2(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     prompt, analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     embedding, batch_id,
@@ -748,7 +748,7 @@ async def _import_one_phase2(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     prompt, analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     batch_id,

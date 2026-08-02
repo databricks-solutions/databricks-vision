@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..core import Dependencies
 from ..core._background import spawn_bg
+from ..core._eval import metrics_json
 from ..core._image_gen_dep import _get_user_token, get_image_gen, get_sp_token
 from ..core._image_validation import validate_size as _validate_size
 
@@ -180,7 +181,7 @@ async def _save_and_analyze(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     analysis.criteria_evaluation, embedding,
@@ -199,7 +200,7 @@ async def _save_and_analyze(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     analysis.criteria_evaluation,
