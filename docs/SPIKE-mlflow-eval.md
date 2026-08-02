@@ -8,7 +8,38 @@ This is a spike, not a design sign-off. It answers: *is it worth pivoting our ho
 image evaluation onto MLflow, and what would that actually look like?* No production code
 changed.
 
-## PoC outcome (2026-07-31): validated end-to-end ✅
+## Production outcome (2026-08-02): deployed + working in the app ✅
+
+The integration is **live in the `databricks-vision` app** and multimodal judges score real
+generations end-to-end. On the deployed app, a generation produces MLflow traces in
+`/Shared/databricks-vision-eval` with all judges scoring — including `visual_quality`, whose
+rationales describe the actual image ("Excellent composition with warm natural lighting, strong
+focus and texture"), proving `get_span_image` fetches the image in the App runtime. Scores
+mirror back into the `generated_images` gallery columns.
+
+**The one hard problem and its fix (Databricks Apps egress).** In the App runtime, MLflow's
+default trace **artifact** store is the regional blob proxy (`*.storage.cloud.databricks.com`),
+which serverless/Apps compute **cannot reach** (internet-zone signed URL → `Connection refused`).
+So attachment upload failed and `get_span_image` couldn't fetch the image. Researching internal
+history found this is a known FEVM issue (JIRA **FEVM-391** + the FE Slack thread), closed
+"not a defect": **opening egress is a no-op — the proxy is unreachable by design.** The verified
+fix, entirely within workspace-admin scope, is to create the MLflow experiment with
+**`artifact_location` on a UC Volume** (a path the app already reaches) and grant the app SP
+`READ VOLUME`/`WRITE VOLUME` + `CAN_EDIT` on the experiment. `scripts/post-deploy.sh` now does
+this automatically.
+
+Two gotchas worth recording:
+- **Wheel caching:** the app wheel version is derived from the git hash, so *uncommitted* edits
+  produce an identically-named wheel and the Apps runtime logs "Requirements have not changed.
+  Skipping installation" — your new code never installs. **Commit to force a reinstall.**
+- **Contaminated experiments:** an experiment that was ever bound via
+  `set_experiment(trace_location=UnityCatalog(...))` is *permanently* stamped with a UC-table
+  trace destination that routes attachments back to the blob proxy. Use a **fresh** experiment
+  whose only trace config is the Volume `artifact_location`.
+
+---
+
+## PoC outcome (2026-07-31): validated end-to-end (notebook) ✅
 
 `notebooks/03_MLFLOW_EVAL_POC.py` ran clean over 5 corpus images in the workspace. All three
 `{{ trace }}` judges (`prompt_adherence`, `visual_quality`, `safe_content`) scored every image
