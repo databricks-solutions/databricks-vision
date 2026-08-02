@@ -97,6 +97,25 @@ _SAFE_CONTENT_INSTRUCTIONS = (
     "In the rationale, name any specific safety issue found, or state that none were found."
 )
 
+_PURPOSE_FIT_INSTRUCTIONS = (
+    "Evaluate how well the AI-generated image fits its intended purpose.\n"
+    "The generation prompt (which may state or imply the purpose) is provided in {{ inputs }}.\n"
+    "Inspect the image captured in {{ trace }} (retrieve the image attachment from the trace).\n"
+    "Score suitability for the stated purpose. If no explicit purpose is stated in the prompt, "
+    "give a neutral 3.\n"
+    "Respond with a single integer 0-5 (5 = ideally suited) and a one-sentence rationale."
+)
+
+_TEXT_LEGIBILITY_INSTRUCTIONS = (
+    "Evaluate the clarity and correctness of any text rendered inside the AI-generated image "
+    "captured in {{ trace }} (retrieve the image attachment from the trace). The generation "
+    "prompt is in {{ inputs }}.\n"
+    "Judge whether in-image text is legible and correctly spelled. If the image contains no "
+    "text and none was required by the prompt, give a 5.\n"
+    "Respond with a single integer 0-5 (5 = perfectly legible / not applicable) and a "
+    "one-sentence rationale."
+)
+
 _BRAND_CONFLICT_INSTRUCTIONS = (
     "You are checking an AI-generated image for brand conflicts.\n"
     "The generation prompt and brand/style criteria are provided in {{ inputs }}.\n"
@@ -119,9 +138,10 @@ _CRITERIA_ADHERENCE_INSTRUCTIONS = (
 def build_judges(model: str, reasoning_effort: str | None) -> dict[str, Any]:
     """Construct the judge set once at startup. Built once, reused across requests.
 
-    Returns a dict name -> Judge. `prompt_adherence`, `visual_quality`, `safe_content` are
-    always-on; `brand_conflict` and `criteria_adherence` are conditional (only invoked when
-    criteria are supplied) but constructed here.
+    Returns a dict name -> Judge. The five metric judges (`prompt_adherence`, `visual_quality`,
+    `safe_content`, `purpose_fit`, `text_legibility`) are always-on; `brand_conflict` and
+    `criteria_adherence` are conditional (only invoked when criteria are supplied) but
+    constructed here.
     """
     from mlflow.genai.judges import make_judge
 
@@ -144,6 +164,8 @@ def build_judges(model: str, reasoning_effort: str | None) -> dict[str, Any]:
         "prompt_adherence": _judge("prompt_adherence", _PROMPT_ADHERENCE_INSTRUCTIONS, int),
         "visual_quality": _judge("visual_quality", _VISUAL_QUALITY_INSTRUCTIONS, int),
         "safe_content": _judge("safe_content", _SAFE_CONTENT_INSTRUCTIONS, int),
+        "purpose_fit": _judge("purpose_fit", _PURPOSE_FIT_INSTRUCTIONS, int),
+        "text_legibility": _judge("text_legibility", _TEXT_LEGIBILITY_INSTRUCTIONS, int),
         "brand_conflict": _judge("brand_conflict", _BRAND_CONFLICT_INSTRUCTIONS, str),
         "criteria_adherence": _judge("criteria_adherence", _CRITERIA_ADHERENCE_INSTRUCTIONS, int),
     }
@@ -248,7 +270,8 @@ class ImageEvaluator:
         trace = await asyncio.to_thread(_flush_and_fetch)
         judge_inputs = self._judge_inputs(prompt, criteria)
 
-        active = ["prompt_adherence", "visual_quality", "safe_content"]
+        active = ["prompt_adherence", "visual_quality", "safe_content",
+                  "purpose_fit", "text_legibility"]
         if criteria:
             active += ["brand_conflict", "criteria_adherence"]
 
@@ -307,6 +330,15 @@ class ImageEvaluator:
             # A low safety score with a rationale becomes a safety flag if not already present.
             if s <= 2 and getattr(sc, "rationale", None) and not analysis.safety_flags:
                 analysis.safety_flags = [sc.rationale]
+
+        # The remaining two metric dimensions are judge-scored too; fall back to the structured
+        # analyzer's value only when the judge didn't return a usable score.
+        pf = feedbacks.get("purpose_fit")
+        if pf is not None and (s := self._score(pf)) is not None:
+            analysis.metrics.purpose_fit = s
+        tl = feedbacks.get("text_legibility")
+        if tl is not None and (s := self._score(tl)) is not None:
+            analysis.metrics.text_legibility = s
 
         brand = feedbacks.get("brand_conflict")
         if brand is not None and str(getattr(brand, "value", "")).lower().startswith("conflict"):
