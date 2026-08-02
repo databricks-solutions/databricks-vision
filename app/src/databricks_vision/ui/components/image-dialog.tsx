@@ -18,11 +18,12 @@ import {
 import { Copy, Download, Edit3, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-// The five numeric metric dimensions.
+// The built-in numeric metric dimensions (purpose_fit is merged into prompt_adherence and no
+// longer displayed, but kept optional for backward-compat with older rows).
 export type MetricScores = {
   quality: number;
   prompt_adherence: number;
-  purpose_fit: number;
+  purpose_fit?: number;
   text_legibility: number;
   safe_content: number;
 };
@@ -31,6 +32,8 @@ export type ImageMetrics = MetricScores & {
   // Per-dimension judge rationales (keyed by metric key), nested by the backend under
   // metrics._rationales. Present only when MLflow judges ran; shown as a hover tooltip.
   _rationales?: Record<string, string>;
+  // The user-defined "Custom" criterion result (only when enabled + scored).
+  _custom?: { label: string; score: number | null; rationale?: string | null };
 };
 
 export type ImageDialogImage = {
@@ -58,10 +61,11 @@ export type ImageDialogImage = {
   criteria_evaluation?: string | null;
 };
 
+// The four fixed built-in cells. The 5th cell ("Custom") is rendered dynamically from
+// metrics._custom only when the user has enabled + defined it. Purpose is merged into Prompt.
 const METRIC_LABELS: { key: keyof MetricScores; label: string }[] = [
   { key: "quality", label: "Quality" },
   { key: "prompt_adherence", label: "Prompt" },
-  { key: "purpose_fit", label: "Purpose" },
   { key: "text_legibility", label: "Text" },
   { key: "safe_content", label: "Safe" },
 ];
@@ -246,10 +250,16 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                   </div>
                 </div>
               )}
-              {image.metrics && (
+              {image.metrics && (() => {
+                // 4 built-in cells + a 5th "Custom" cell only when the user's custom criterion
+                // ran (metrics._custom present with a score).
+                const custom = image.metrics?._custom;
+                const hasCustom = !!custom && custom.score != null;
+                const cols = METRIC_LABELS.length + (hasCustom ? 1 : 0);
+                return (
                 <div>
                   <p className="font-medium text-muted-foreground mb-1">Evaluation</p>
-                  <div className="grid grid-cols-5 gap-1 mb-2">
+                  <div className={`grid gap-1 mb-2 ${cols === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
                     {METRIC_LABELS.map(({ key, label }) => {
                       const score = image.metrics?.[key] ?? 0;
                       const rationale = image.metrics?._rationales?.[key];
@@ -264,12 +274,22 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                         </div>
                       );
                     })}
+                    {hasCustom && (
+                      <div
+                        className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 ${metricColor(custom!.score!)} ${custom!.rationale ? "cursor-help" : ""}`}
+                        title={custom!.rationale ? `${custom!.label}: ${custom!.score}/5\n\n${custom!.rationale}` : `${custom!.label}: ${custom!.score}/5`}
+                      >
+                        <span className="text-[10px] font-medium uppercase tracking-wide leading-none truncate max-w-full">{custom!.label}</span>
+                        <span className="text-sm font-semibold leading-none">{custom!.score}</span>
+                      </div>
+                    )}
                   </div>
                   {image.evaluation && (
                     <p className="text-foreground text-xs leading-snug">{image.evaluation}</p>
                   )}
                 </div>
-              )}
+                );
+              })()}
               {image.metrics && (() => {
                 // The 5 scores (with per-dimension hover rationales) convey what's weak, so
                 // there's no separate "issues" list. We surface only: (a) an improved prompt —

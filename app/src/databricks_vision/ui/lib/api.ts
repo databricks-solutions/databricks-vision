@@ -2361,3 +2361,106 @@ export function useListVolumesSuspense<TData = {
         ...options?.query
     });
 }
+
+// ── Eval criteria (hand-added; mirrors the generated style-guidelines block) ──
+export interface EvalCriterionOut {
+    key: string;
+    label: string;
+    instructions: string;
+    is_custom: boolean;
+    enabled: boolean;
+}
+export interface EvalCriterionUpdate {
+    instructions?: string | null;
+    label?: string | null;
+    enabled?: boolean | null;
+}
+export const listEvalCriteria = async (options?: RequestInit): Promise<{
+    data: EvalCriterionOut[];
+}> =>{
+    const res = await fetch("/api/eval-criteria", {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(body); } catch { parsed = body; }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return { data: await res.json() };
+};
+export const listEvalCriteriaKey = ()=>{
+    return ["/api/eval-criteria"] as const;
+};
+export function useListEvalCriteria<TData = {
+    data: EvalCriterionOut[];
+}>(options?: {
+    query?: Omit<UseQueryOptions<{
+        data: EvalCriterionOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listEvalCriteriaKey(),
+        queryFn: ()=>listEvalCriteria(),
+        ...options?.query
+    });
+}
+export interface UpdateEvalCriterionParams {
+    key: string;
+}
+export const updateEvalCriterion = async (params: UpdateEvalCriterionParams, data: EvalCriterionUpdate, options?: RequestInit): Promise<{
+    data: EvalCriterionOut;
+}> =>{
+    const res = await fetch(`/api/eval-criteria/${params.key}`, {
+        ...options,
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(body); } catch { parsed = body; }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return { data: await res.json() };
+};
+export function useUpdateEvalCriterion(options?: {
+    mutation?: UseMutationOptions<{
+        data: EvalCriterionOut;
+    }, ApiError, {
+        params: UpdateEvalCriterionParams;
+        data: EvalCriterionUpdate;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>updateEvalCriterion(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
+export const resetEvalCriterion = async (params: UpdateEvalCriterionParams, options?: RequestInit): Promise<{
+    data: EvalCriterionOut;
+}> =>{
+    const res = await fetch(`/api/eval-criteria/${params.key}/reset`, {
+        ...options,
+        method: "POST"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(body); } catch { parsed = body; }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return { data: await res.json() };
+};
+export function useResetEvalCriterion(options?: {
+    mutation?: UseMutationOptions<{
+        data: EvalCriterionOut;
+    }, ApiError, UpdateEvalCriterionParams>;
+}) {
+    return useMutation({
+        mutationFn: (params)=>resetEvalCriterion(params),
+        ...options?.mutation
+    });
+}

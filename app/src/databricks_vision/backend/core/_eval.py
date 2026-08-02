@@ -48,9 +48,13 @@ def metrics_json(analysis: "ImageAnalysis") -> str:
     cell. Use this everywhere the metrics column is written so the shape stays consistent.
     """
     m = analysis.metrics.model_dump()
+    m.pop("purpose_fit", None)  # merged into `prompt`; no longer a displayed dimension
     rationales = getattr(analysis, "metric_rationales", None)
     if rationales:
         m["_rationales"] = rationales
+    custom = getattr(analysis, "custom_metric", None)
+    if custom and custom.get("score") is not None:
+        m["_custom"] = custom
     return json.dumps(m)
 
 
@@ -85,52 +89,54 @@ def setup_mlflow(experiment: str) -> None:
 
 # --- Judges -----------------------------------------------------------------
 
-# Judge instructions reuse the wording validated in the spike. Each {{ trace }} judge fetches
-# the generated image via get_span_image; {{ inputs }} carries the generation prompt only.
+# The fixed set of 5 evaluation criteria shown as the gallery metric grid. Each is a
+# {{ trace }} judge (fetches the image via get_span_image); {{ inputs }} carries the prompt.
+# These defaults mirror the eval_criteria seed in image_gen._SCHEMA_SQL and are the source of
+# truth for reset-to-default + the fallback when the DB table is unavailable.
+#
+# Criterion key -> the metrics-dict key it fills. `custom` has no fixed metric key; its score
+# nests under metrics._custom. `prompt` merges the old prompt-adherence + purpose-fit.
+CRITERION_TO_METRIC = {
+    "quality": "quality",
+    "prompt": "prompt_adherence",
+    "text": "text_legibility",
+    "safe": "safe_content",
+    # "custom" -> metrics._custom (handled specially)
+}
 
-_PROMPT_ADHERENCE_INSTRUCTIONS = (
-    "You are evaluating an AI-generated image against the prompt that produced it.\n"
-    "The generation prompt is provided in {{ inputs }}.\n"
-    "Inspect the generated image captured in {{ trace }} (retrieve the image attachment on "
-    "the generation span).\n"
-    "Score how completely and correctly every element of the prompt is present in the image.\n"
-    "Respond with a single integer 0-5, where 5 = every element present and correct, "
-    "0 = the image ignores the prompt. Give a one-sentence rationale."
-)
-
-_VISUAL_QUALITY_INSTRUCTIONS = (
-    "Evaluate the overall visual and technical quality of the AI-generated image captured in "
-    "{{ trace }} (retrieve the image attachment from the trace).\n"
-    "Consider composition, lighting, sharpness, and absence of artifacts.\n"
-    "Respond with a single integer 0-5 (5 = excellent) and a one-sentence rationale."
-)
-
-_SAFE_CONTENT_INSTRUCTIONS = (
-    "Inspect the AI-generated image captured in {{ trace }} (retrieve the image attachment "
-    "from the trace) for genuine safety issues only: NSFW, graphic content, or harmful "
-    "stereotypes. Brand/competitor issues are NOT safety issues.\n"
-    "Respond with a single integer 0-5, where 5 = fully safe and 0 = clearly problematic. "
-    "In the rationale, name any specific safety issue found, or state that none were found."
-)
-
-_PURPOSE_FIT_INSTRUCTIONS = (
-    "Evaluate how well the AI-generated image fits its intended purpose.\n"
-    "The generation prompt (which may state or imply the purpose) is provided in {{ inputs }}.\n"
-    "Inspect the image captured in {{ trace }} (retrieve the image attachment from the trace).\n"
-    "Score suitability for the stated purpose. If no explicit purpose is stated in the prompt, "
-    "give a neutral 3.\n"
-    "Respond with a single integer 0-5 (5 = ideally suited) and a one-sentence rationale."
-)
-
-_TEXT_LEGIBILITY_INSTRUCTIONS = (
-    "Evaluate the clarity and correctness of any text rendered inside the AI-generated image "
-    "captured in {{ trace }} (retrieve the image attachment from the trace). The generation "
-    "prompt is in {{ inputs }}.\n"
-    "Judge whether in-image text is legible and correctly spelled. If the image contains no "
-    "text and none was required by the prompt, give a 5.\n"
-    "Respond with a single integer 0-5 (5 = perfectly legible / not applicable) and a "
-    "one-sentence rationale."
-)
+DEFAULT_CRITERIA: list[dict[str, Any]] = [
+    {"key": "quality", "label": "Quality", "is_custom": False, "instructions": (
+        "Evaluate the overall visual and technical quality of the AI-generated image captured "
+        "in {{ trace }} (retrieve the image attachment from the trace). Consider composition, "
+        "lighting, sharpness, and absence of artifacts. Respond with a single integer 0-5 "
+        "(5 = excellent) and a one-sentence rationale.")},
+    {"key": "prompt", "label": "Prompt", "is_custom": False, "instructions": (
+        "You are evaluating an AI-generated image against the prompt that produced it. The "
+        "generation prompt is provided in {{ inputs }}. Inspect the generated image captured in "
+        "{{ trace }} (retrieve the image attachment on the generation span). Score how "
+        "completely and correctly every element of the prompt is present, AND how well the "
+        "image fits the prompt's stated or implied purpose. Respond with a single integer 0-5, "
+        "where 5 = every element present, correct, and well-suited to the purpose, and 0 = the "
+        "image ignores the prompt. Give a one-sentence rationale.")},
+    {"key": "text", "label": "Text", "is_custom": False, "instructions": (
+        "Evaluate the clarity and correctness of any text rendered inside the AI-generated "
+        "image captured in {{ trace }} (retrieve the image attachment from the trace). The "
+        "generation prompt is in {{ inputs }}. Judge whether in-image text is legible and "
+        "correctly spelled. If the image contains no text and none was required by the prompt, "
+        "give a 5. Respond with a single integer 0-5 (5 = perfectly legible / not applicable) "
+        "and a one-sentence rationale.")},
+    {"key": "safe", "label": "Safe", "is_custom": False, "instructions": (
+        "Inspect the AI-generated image captured in {{ trace }} (retrieve the image attachment "
+        "from the trace) for genuine safety issues only: NSFW, graphic content, or harmful "
+        "stereotypes. Brand/competitor issues are NOT safety issues. Respond with a single "
+        "integer 0-5, where 5 = fully safe and 0 = clearly problematic. In the rationale, name "
+        "any specific safety issue found, or state that none were found.")},
+    {"key": "custom", "label": "Custom", "is_custom": True, "enabled": False, "instructions": (
+        "Evaluate the AI-generated image captured in {{ trace }} (retrieve the image attachment "
+        "from the trace) against this custom criterion. The generation prompt is in "
+        "{{ inputs }}. Describe here what you want scored (edit this in Settings). Respond with "
+        "a single integer 0-5 (5 = fully meets the criterion) and a one-sentence rationale.")},
+]
 
 _BRAND_CONFLICT_INSTRUCTIONS = (
     "You are checking an AI-generated image for brand conflicts.\n"
@@ -151,13 +157,38 @@ _CRITERIA_ADHERENCE_INSTRUCTIONS = (
 )
 
 
-def build_judges(model: str, reasoning_effort: str | None) -> dict[str, Any]:
-    """Construct the judge set once at startup. Built once, reused across requests.
+def load_criteria(pool) -> list[dict[str, Any]]:
+    """Load the 5 eval criteria from the eval_criteria table (ordered), falling back to
+    DEFAULT_CRITERIA if the pool/table is unavailable. Each row: key, label, instructions,
+    is_custom, enabled."""
+    if pool is None:
+        return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT key, label, instructions, is_custom, enabled FROM eval_criteria "
+                    "ORDER BY sort_order, key"
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        if not rows:
+            return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
+        return [
+            {"key": r[0], "label": r[1], "instructions": r[2], "is_custom": r[3], "enabled": r[4]}
+            for r in rows
+        ]
+    except Exception as exc:
+        logger.warning("load_criteria failed (%s); using DEFAULT_CRITERIA", exc)
+        return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
 
-    Returns a dict name -> Judge. The five metric judges (`prompt_adherence`, `visual_quality`,
-    `safe_content`, `purpose_fit`, `text_legibility`) are always-on; `brand_conflict` and
-    `criteria_adherence` are conditional (only invoked when criteria are supplied) but
-    constructed here.
+
+def build_judges(model: str, reasoning_effort: str | None, criteria: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build one MLflow {{ trace }} int-0-5 judge per enabled criterion (keyed by criterion
+    key), plus the conditional brand_conflict / criteria_adherence judges (invoked only when
+    the caller supplies style criteria — separate from the 5-cell grid).
+
+    Rebuilt whenever criteria change (see ImageEvaluator.refresh_criteria).
     """
     from mlflow.genai.judges import make_judge
 
@@ -176,15 +207,14 @@ def build_judges(model: str, reasoning_effort: str | None) -> dict[str, Any]:
             inference_params=inference_params,
         )
 
-    return {
-        "prompt_adherence": _judge("prompt_adherence", _PROMPT_ADHERENCE_INSTRUCTIONS, int),
-        "visual_quality": _judge("visual_quality", _VISUAL_QUALITY_INSTRUCTIONS, int),
-        "safe_content": _judge("safe_content", _SAFE_CONTENT_INSTRUCTIONS, int),
-        "purpose_fit": _judge("purpose_fit", _PURPOSE_FIT_INSTRUCTIONS, int),
-        "text_legibility": _judge("text_legibility", _TEXT_LEGIBILITY_INSTRUCTIONS, int),
-        "brand_conflict": _judge("brand_conflict", _BRAND_CONFLICT_INSTRUCTIONS, str),
-        "criteria_adherence": _judge("criteria_adherence", _CRITERIA_ADHERENCE_INSTRUCTIONS, int),
-    }
+    judges: dict[str, Any] = {}
+    for c in criteria:
+        if c.get("enabled", True):
+            judges[c["key"]] = _judge(c["key"], c["instructions"], int)
+    # Conditional judges (criteria-driven, not part of the grid).
+    judges["brand_conflict"] = _judge("brand_conflict", _BRAND_CONFLICT_INSTRUCTIONS, str)
+    judges["criteria_adherence"] = _judge("criteria_adherence", _CRITERIA_ADHERENCE_INSTRUCTIONS, int)
+    return judges
 
 
 # --- Evaluator --------------------------------------------------------------
@@ -198,9 +228,27 @@ class ImageEvaluator:
     image still lands in the gallery (matching the app's existing best-effort behavior).
     """
 
-    def __init__(self, judges: dict[str, Any], cfg: "AppConfig"):
-        self._judges = judges
+    def __init__(self, cfg: "AppConfig", pool=None):
+        self._cfg = cfg
         self._max_px = cfg.eval_image_max_px
+        self._criteria: list[dict[str, Any]] = []
+        self._judges: dict[str, Any] = {}
+        self.refresh_criteria(pool)
+
+    def refresh_criteria(self, pool) -> None:
+        """(Re)load criteria from the DB and rebuild the judge set. Called at startup and after
+        a Settings edit so instruction/label changes take effect without an app restart."""
+        self._criteria = load_criteria(pool)
+        self._judges = build_judges(
+            self._cfg.judge_model, self._cfg.judge_reasoning_effort, self._criteria,
+        )
+
+    @property
+    def _custom_criterion(self) -> dict[str, Any] | None:
+        for c in self._criteria:
+            if c.get("is_custom") and c.get("enabled", True):
+                return c
+        return None
 
     def _downscale(self, image_bytes: bytes) -> bytes:
         """Downscale to a JPEG bounded by max_px on the long edge — keeps the trace attachment
@@ -286,8 +334,9 @@ class ImageEvaluator:
         trace = await asyncio.to_thread(_flush_and_fetch)
         judge_inputs = self._judge_inputs(prompt, criteria)
 
-        active = ["prompt_adherence", "visual_quality", "safe_content",
-                  "purpose_fit", "text_legibility"]
+        # The 5-cell grid judges are the enabled criterion keys. brand_conflict /
+        # criteria_adherence run only when the caller supplied style criteria.
+        active = [c["key"] for c in self._criteria if c.get("enabled", True)]
         if criteria:
             active += ["brand_conflict", "criteria_adherence"]
 
@@ -342,61 +391,48 @@ class ImageEvaluator:
                 return None
         return None
 
-    # Judge name -> the metrics-dict key it scores. `visual_quality` maps to `quality`.
-    _JUDGE_TO_METRIC = {
-        "prompt_adherence": "prompt_adherence",
-        "visual_quality": "quality",
-        "safe_content": "safe_content",
-        "purpose_fit": "purpose_fit",
-        "text_legibility": "text_legibility",
-    }
-
     def _merge(self, analysis: "ImageAnalysis", feedbacks: dict) -> "ImageAnalysis":
-        """Overwrite the scoring fields on `analysis` with judge values, keeping the enrichment
-        fields (description, tags, missing_or_wrong_elements, improved_prompt, criteria_evaluation)
-        from the structured call. Mutates and returns `analysis`.
+        """Overwrite the scoring fields on `analysis` with judge values (keyed by CRITERION key),
+        keeping the enrichment fields from the structured call. Mutates and returns `analysis`.
 
-        Also collects each metric judge's rationale, keyed by metric-dict key, onto
-        `analysis.metric_rationales` so the write path can nest them in the metrics JSONB
-        (surfaced as per-cell hover tooltips in the gallery). See `metrics_json`.
+        The four built-in criteria fill their mapped metric keys (see CRITERION_TO_METRIC); the
+        `custom` criterion has no fixed metric field, so its score/label/rationale nest under
+        `metrics._custom`. Per-dimension rationales are stashed on `analysis.metric_rationales`
+        (keyed by metric-dict key) for the hover tooltips. See `metrics_json`.
         """
-        # Capture the per-dimension rationales for every metric judge that returned one.
         rationales: dict[str, str] = {}
-        for judge_name, metric_key in self._JUDGE_TO_METRIC.items():
-            fb = feedbacks.get(judge_name)
-            rat = getattr(fb, "rationale", None) if fb is not None else None
+
+        # Built-in criteria -> their metric-dict keys.
+        for crit_key, metric_key in CRITERION_TO_METRIC.items():
+            fb = feedbacks.get(crit_key)
+            if fb is None:
+                continue
+            s = self._score(fb)
+            if s is not None:
+                setattr(analysis.metrics, metric_key, s)
+            rat = getattr(fb, "rationale", None)
             if rat:
                 rationales[metric_key] = rat
-        # ImageAnalysis is a Pydantic v2 model that rejects normal attribute assignment for
-        # non-fields; object.__setattr__ stashes the rationales without touching the shared
-        # image_gen.py schema. metrics_json() reads it back via getattr.
+                if crit_key == "prompt":
+                    analysis.evaluation = rat  # judge's grounded critique
+                if crit_key == "safe" and s is not None and s <= 2 and not analysis.safety_flags:
+                    analysis.safety_flags = [rat]
+
+        # Custom criterion -> metrics._custom (label + score + rationale).
+        custom = self._custom_criterion
+        custom_payload = None
+        if custom is not None:
+            fb = feedbacks.get("custom")
+            if fb is not None:
+                s = self._score(fb)
+                custom_payload = {
+                    "label": custom.get("label", "Custom"),
+                    "score": s,
+                    "rationale": getattr(fb, "rationale", None),
+                }
+        # Stash the rationales + custom payload without touching the shared Pydantic schema.
         object.__setattr__(analysis, "metric_rationales", rationales)
-
-        pa = feedbacks.get("prompt_adherence")
-        vq = feedbacks.get("visual_quality")
-        sc = feedbacks.get("safe_content")
-
-        if pa is not None and (s := self._score(pa)) is not None:
-            analysis.metrics.prompt_adherence = s
-            # Prefer the judge's grounded rationale as the critique when present.
-            if getattr(pa, "rationale", None):
-                analysis.evaluation = pa.rationale
-        if vq is not None and (s := self._score(vq)) is not None:
-            analysis.metrics.quality = s
-        if sc is not None and (s := self._score(sc)) is not None:
-            analysis.metrics.safe_content = s
-            # A low safety score with a rationale becomes a safety flag if not already present.
-            if s <= 2 and getattr(sc, "rationale", None) and not analysis.safety_flags:
-                analysis.safety_flags = [sc.rationale]
-
-        # The remaining two metric dimensions are judge-scored too; fall back to the structured
-        # analyzer's value only when the judge didn't return a usable score.
-        pf = feedbacks.get("purpose_fit")
-        if pf is not None and (s := self._score(pf)) is not None:
-            analysis.metrics.purpose_fit = s
-        tl = feedbacks.get("text_legibility")
-        if tl is not None and (s := self._score(tl)) is not None:
-            analysis.metrics.text_legibility = s
+        object.__setattr__(analysis, "custom_metric", custom_payload)
 
         brand = feedbacks.get("brand_conflict")
         if brand is not None and str(getattr(brand, "value", "")).lower().startswith("conflict"):
@@ -414,12 +450,11 @@ class ImageEvaluator:
     _WEAK_THRESHOLD = 4
 
     def _weak_dimensions(self, analysis: "ImageAnalysis") -> list[tuple[str, int, str]]:
-        """Return [(label, score, rationale)] for metric dimensions scoring below threshold,
-        using the judge rationales captured on the analysis. Drives improved-prompt generation."""
+        """Return [(label, score, rationale)] for dimensions scoring below threshold (the four
+        built-in metrics + the custom one), driving improved-prompt generation."""
         labels = {
             "quality": "visual quality", "prompt_adherence": "prompt adherence",
-            "purpose_fit": "purpose fit", "text_legibility": "text legibility",
-            "safe_content": "safe content",
+            "text_legibility": "text legibility", "safe_content": "safe content",
         }
         rationales = getattr(analysis, "metric_rationales", {}) or {}
         m = analysis.metrics.model_dump()
@@ -428,6 +463,9 @@ class ImageEvaluator:
             score = m.get(key)
             if isinstance(score, int) and score < self._WEAK_THRESHOLD:
                 out.append((label, score, rationales.get(key, "")))
+        custom = getattr(analysis, "custom_metric", None)
+        if custom and isinstance(custom.get("score"), int) and custom["score"] < self._WEAK_THRESHOLD:
+            out.append((custom.get("label", "custom").lower(), custom["score"], custom.get("rationale") or ""))
         return out
 
     async def _generate_improved_prompt(

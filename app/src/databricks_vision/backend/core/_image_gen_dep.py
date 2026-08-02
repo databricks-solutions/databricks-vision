@@ -117,13 +117,14 @@ class _ImageGenDependency(LifespanDependency):
         app.state.image_evaluator = None
         if cfg.eval_enabled and cfg.eval_experiment:
             try:
-                from ._eval import ImageEvaluator, build_judges, setup_mlflow
+                from ._eval import ImageEvaluator, setup_mlflow
 
                 # The experiment is created (in post-deploy) with artifact_location on a UC
                 # Volume so trace attachments land on a path the App can reach. See setup_mlflow.
                 setup_mlflow(cfg.eval_experiment)
-                judges = build_judges(cfg.judge_model, cfg.judge_reasoning_effort)
-                app.state.image_evaluator = ImageEvaluator(judges, cfg)
+                # The evaluator loads the 5 eval_criteria from the DB and builds one judge per
+                # enabled criterion; it can refresh_criteria(pool) after a Settings edit.
+                app.state.image_evaluator = ImageEvaluator(cfg, pool=pool)
                 logger.info(
                     "ImageEvaluator ready (experiment=%s, judge_model=%s)",
                     cfg.eval_experiment, cfg.judge_model,

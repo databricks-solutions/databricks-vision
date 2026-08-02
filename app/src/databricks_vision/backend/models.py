@@ -168,6 +168,22 @@ class StyleGuidelineUpdate(BaseModel):
     is_default: bool | None = None
 
 
+# --- Eval criteria (the fixed 5-cell image-eval metric grid) ---
+
+class EvalCriterionOut(BaseModel):
+    key: str
+    label: str
+    instructions: str
+    is_custom: bool
+    enabled: bool
+
+
+class EvalCriterionUpdate(BaseModel):
+    instructions: str | None = None
+    label: str | None = None   # custom criterion only
+    enabled: bool | None = None
+
+
 # --- Settings models ---
 
 class SettingsOut(BaseModel):
