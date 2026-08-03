@@ -164,8 +164,11 @@ def load_criteria(pool) -> list[dict[str, Any]]:
     if pool is None:
         return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
     try:
+        from psycopg.rows import dict_row
         with pool.connection() as conn:
-            with conn.cursor() as cur:
+            # The app pool defaults to dict_row; force it here so access is by column name
+            # regardless of the pool's configured row factory.
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT key, label, instructions, is_custom, enabled FROM eval_criteria "
                     "ORDER BY sort_order, key"
@@ -175,7 +178,8 @@ def load_criteria(pool) -> list[dict[str, Any]]:
         if not rows:
             return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
         return [
-            {"key": r[0], "label": r[1], "instructions": r[2], "is_custom": r[3], "enabled": r[4]}
+            {"key": r["key"], "label": r["label"], "instructions": r["instructions"],
+             "is_custom": r["is_custom"], "enabled": r["enabled"]}
             for r in rows
         ]
     except Exception as exc:
@@ -231,17 +235,45 @@ class ImageEvaluator:
     def __init__(self, cfg: "AppConfig", pool=None):
         self._cfg = cfg
         self._max_px = cfg.eval_image_max_px
+        self._pool = pool
         self._criteria: list[dict[str, Any]] = []
+        self._criteria_sig: str = ""
         self._judges: dict[str, Any] = {}
         self.refresh_criteria(pool)
 
+    @staticmethod
+    def _sig(criteria: list[dict[str, Any]]) -> str:
+        """Cheap signature of the criteria set to detect changes (label/instructions/enabled)."""
+        return json.dumps(
+            [(c["key"], c.get("label"), c.get("instructions"), c.get("enabled", True)) for c in criteria],
+            sort_keys=True,
+        )
+
     def refresh_criteria(self, pool) -> None:
-        """(Re)load criteria from the DB and rebuild the judge set. Called at startup and after
-        a Settings edit so instruction/label changes take effect without an app restart."""
-        self._criteria = load_criteria(pool)
+        """(Re)load criteria from the DB and rebuild the judge set. Called at startup, after a
+        Settings edit, and lazily per score_image (so all uvicorn workers self-heal)."""
+        if pool is not None:
+            self._pool = pool
+        self._criteria = load_criteria(self._pool)
+        self._criteria_sig = self._sig(self._criteria)
         self._judges = build_judges(
             self._cfg.judge_model, self._cfg.judge_reasoning_effort, self._criteria,
         )
+
+    def _reload_if_changed(self) -> None:
+        """Reload criteria from the DB and rebuild judges only if they changed. Runs at the
+        start of each (background) scoring so edits made on any worker take effect everywhere,
+        without a per-image judge rebuild when nothing changed."""
+        try:
+            latest = load_criteria(self._pool)
+        except Exception:
+            return
+        if self._sig(latest) != self._criteria_sig:
+            self._criteria = latest
+            self._criteria_sig = self._sig(latest)
+            self._judges = build_judges(
+                self._cfg.judge_model, self._cfg.judge_reasoning_effort, self._criteria,
+            )
 
     @property
     def _custom_criterion(self) -> dict[str, Any] | None:
@@ -314,6 +346,9 @@ class ImageEvaluator:
         Raises on failure — callers fall back to plain analyzer.analyze().
         """
         import mlflow
+
+        # Pick up any Settings edits (possibly made on another uvicorn worker) before scoring.
+        await asyncio.to_thread(self._reload_if_changed)
 
         eval_bytes = await asyncio.to_thread(self._downscale, image_bytes)
         eval_uri = "data:image/jpeg;base64," + base64.b64encode(eval_bytes).decode()
