@@ -1,6 +1,6 @@
 # Databricks Vision
 
-Production-ready image generation, editing, analysis, and semantic search on Databricks. One Python library (`image_gen.py`) drives a deployable FastAPI + React Databricks App that supports single-image generate/edit, batch jobs, gallery, semantic search, and bulk import.
+Production-ready image generation, editing, MLflow-based evaluation, and semantic search on Databricks. One Python library (`image_gen.py`) drives a deployable FastAPI + React Databricks App that supports single-image generate/edit, batch jobs, gallery, MLflow GenAI judge evaluation, semantic search, and bulk import.
 
 <p align="center">
   <img src="samples/collage.png" alt="Sample outputs" width="900" />
@@ -10,7 +10,7 @@ Production-ready image generation, editing, analysis, and semantic search on Dat
 
 - **Generate** images with `gpt-image-2` (auto-routes to `gpt-image-1.5` for transparent backgrounds). Any WxH multiple of 16 up to 3840px, total pixels 655K–8.3M, edge ratio ≤ 3:1.
 - **Edit** existing images with prompt + reference. Edits land as new gallery rows.
-- **Analyze** every generated image with `databricks-gpt-5-5`: description, tags, evaluation, 5×0-5 metric sub-scores, missing-elements, safety flags, brand conflicts, an improved-prompt suggestion, and an optional `criteria_evaluation` against user-supplied style guidelines.
+- **Evaluate** every generated image with **MLflow 3.15 GenAI judges** (`make_judge`, multimodal `{{ trace }}` judges that see the image via `get_span_image`): five 0-5 metric dimensions (quality, prompt, text legibility, safe content, + a user-defined *custom* criterion), each with a per-metric rationale, plus a generated improved-prompt suggestion for weak results. Judge criteria are **editable from the Settings page**; traces + scores land in an MLflow experiment. A structured `databricks-gpt-5-5` call still supplies enrichment (description, tags).
 - **Search** the corpus by text or by uploaded image. SigLIP-2 1152-dim embeddings, pgvector HNSW + cosine similarity, single-query join of metadata + similarity. FTS fallback available.
 - **Batch generate** via a Databricks Job: multi-image (one prompt template applied to N inputs) or variations (one source × N variation prompts).
 - **Import** local images in bulk; the app synthesizes a prompt then runs the same analyzer + embedder pipeline so imported images become searchable.
@@ -23,8 +23,9 @@ Production-ready image generation, editing, analysis, and semantic search on Dat
 
 - **Backend** — Python, FastAPI, Pydantic
 - **Frontend** — React 19, TypeScript, TanStack Router / Query, shadcn/ui, Tailwind
-- **Storage** — Unity Catalog Volumes (image bytes) + Lakebase Autoscaling Postgres with pgvector (metadata, evals, embeddings)
-- **Inference** — Databricks Model Serving wrapping the Responses API with `gpt-image-2` / `gpt-image-1.5`; analyzer backed by `databricks-gpt-5-5`; image + text embeddings from a custom SigLIP-2 SO400M/14-384 endpoint
+- **Storage** — Unity Catalog Volumes (image bytes + MLflow trace attachments) + Lakebase Autoscaling Postgres with pgvector (metadata, evals, embeddings)
+- **Evaluation** — MLflow 3.15 GenAI: `make_judge` multimodal `{{ trace }}` judges on `databricks-gpt-5-5`, traced to an MLflow experiment (UC-Volume artifact location); DB-managed, editable criteria
+- **Inference** — Databricks Model Serving wrapping the Responses API with `gpt-image-2` / `gpt-image-1.5`; judge + enrichment backed by `databricks-gpt-5-5`; image + text embeddings from a custom SigLIP-2 SO400M/14-384 endpoint
 - **Build / deploy** — Databricks Asset Bundles, [apx](https://github.com/databricks/apx) toolkit, `uv`, `bun`
 
 ## Architecture
@@ -32,31 +33,38 @@ Production-ready image generation, editing, analysis, and semantic search on Dat
 ```
 ┌────────────────────────────────────┐     ┌────────────────────────────────────┐
 │  Databricks App                    │     │  Lakebase Autoscaling Postgres     │
-│  (FastAPI + React)                 │◄───►│  (metadata + pgvector embeddings)  │
+│  (FastAPI + React)                 │◄───►│  (metadata + evals + pgvector,     │
+│                                    │     │   editable eval_criteria table)    │
 └─────────────┬──────────────────────┘     └────────────────────────────────────┘
               │
               ├──► Foundation Model serving
               │     ├── gpt-image-2 / gpt-image-1.5   (generate, edit)
-              │     └── databricks-gpt-5-5            (analyzer, prompt rewrite)
+              │     └── databricks-gpt-5-5            (enrichment + MLflow judges)
+              │
+              ├──► MLflow 3.15 GenAI evaluation
+              │     ├── make_judge {{ trace }} multimodal judges (5 criteria)
+              │     │     see the image via the get_span_image tool
+              │     └── traces + judge scores  →  MLflow experiment
+              │           (attachments stored on a UC Volume)
               │
               ├──► Custom SigLIP-2 SO400M/14-384 endpoint
               │     (text + image  →  1152-dim embeddings)
               │
               └──► Unity Catalog Volumes
-                    (PNG bytes, organised by batch / folder)
+                    (PNG bytes + MLflow trace attachments)
                                 ▲
    Batch Generation Job ────────┘
    (Databricks Job; ai_query()
     against image-generator endpoint)
 ```
 
-**Single-image flow:** UI streams partial-image events over SSE while the model generates, then the backend persists bytes to a UC Volume, writes the row to Lakebase, and runs the analyzer + embedder as background tasks that `UPDATE` the row when they finish.
+**Single-image flow:** UI streams partial-image events over SSE while the model generates, then the backend persists bytes to a UC Volume, writes the row to Lakebase, and (as background tasks) scores the image with MLflow judges + computes the SigLIP embedding, then `UPDATE`s the row. Scoring traces the image so the `{{ trace }}` judges can retrieve it via `get_span_image`; judge scores + rationales mirror back into the Lakebase eval columns the gallery reads.
 
 **Batch flow:** the app kicks off a Databricks Job that reads inputs from a UC Volume, runs `ai_query()` against the image-generator serving endpoint, writes outputs back to a Volume, and syncs metadata + embeddings to Lakebase. The gallery shows single-gen and batch images from the same table.
 
 ## What's interesting
 
-- **Image evaluation** — every generated image is scored on five 0-5 dimensions (quality, prompt adherence, purpose fit, text legibility, safe content) plus categorical safety / brand flags, with a critique paragraph and a suggested improved prompt for off-spec results. See [`ImageAnalyzer` in image_gen.py](image_gen.py).
+- **MLflow multimodal judge evaluation** — every generated image is scored by MLflow 3.15 `make_judge` `{{ trace }}` judges that *see* the image (the judge calls the `get_span_image` tool to fetch the image attachment off the trace) and return a 0-5 score + rationale per dimension. Five criteria (quality, prompt, text, safe, + a user-defined custom one) are stored in an editable `eval_criteria` table and manageable from the Settings page; scores + rationales are mirrored into Lakebase for the gallery and logged to an MLflow experiment for history/comparison. See [`app/src/databricks_vision/backend/core/_eval.py`](app/src/databricks_vision/backend/core/_eval.py).
 - **Semantic search over the corpus** — every image is embedded with SigLIP-2 (1152-dim) at ingest time and stored in pgvector with an HNSW index on cosine similarity. A single SQL query joins metadata filters with similarity ranking, so the gallery can search by text or by an uploaded image without a separate vector store. See [`ImageSearch` in image_gen.py](image_gen.py).
 - **Two-phase persistence** — generate / edit / import endpoints insert the gallery row immediately with placeholder eval fields, then run the analyzer + embedder as background tasks that `UPDATE` the row when ready. The UI polls for a short window after a generate so eval fields appear without manual refresh.
 - **Lakebase Autoscaling with OAuth-rotating connections** — the psycopg pool re-fetches a Lakebase credential token on every new connection, with `max_lifetime=2700` so connections recycle before the 1-hour token expiry. See [`VisionWorkspace` in image_gen.py](image_gen.py).
@@ -129,6 +137,7 @@ Databricks support doesn't cover this content. For questions or bugs, please [op
 | python-dotenv | .env loader | BSD-3-Clause | https://github.com/theskumar/python-dotenv |
 | httpx | HTTP client | BSD-3-Clause | https://github.com/encode/httpx |
 | OpenAI Python SDK | OpenAI client | Apache-2.0 | https://github.com/openai/openai-python |
+| MLflow | GenAI evaluation (judges + tracing) | Apache-2.0 | https://github.com/mlflow/mlflow |
 | Databricks SDK for Python | Databricks client | Apache-2.0 | https://github.com/databricks/databricks-sdk-py |
 | psycopg | PostgreSQL adapter | LGPL-3.0 | https://github.com/psycopg/psycopg |
 | pgvector-python | pgvector client | MIT | https://github.com/pgvector/pgvector-python |

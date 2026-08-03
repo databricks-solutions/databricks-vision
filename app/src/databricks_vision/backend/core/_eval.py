@@ -7,7 +7,7 @@ an `mlflow-attachment://` reference (via the `get_span_image` tool). We keep the
 missing_or_wrong_elements, improved_prompt, criteria_evaluation) and let judges own the
 calibratable scores (the 0-5 metrics + safety / brand flags).
 
-Design notes (validated in docs/SPIKE-mlflow-eval.md):
+Design notes:
 - The image must reach the judge ONLY via the trace attachment, never in judge `inputs`
   (a judge that renders `{{ inputs }}` would otherwise inline ~1MB of base64 and overflow
   the context window). We therefore pass only the prompt in `inputs`.
