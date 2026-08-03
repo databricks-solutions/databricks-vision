@@ -63,11 +63,11 @@ The three things the PoC depends on were checked live via CLI/SDK before running
   Responses-API call with an `input_image` correctly identified a synthetic red square as
   "Red" — the judge path works here. (`databricks-gpt-5-6-sol` / `-luna` are also available
   as multimodal alternates.)
-- ✅ **Corpus has data to evaluate.** Lakebase `generated_images` holds **66** usable rows
-  (success + volume_path + prompt), all 66 with prior `ImageAnalyzer` `metrics` — a ready-made
-  baseline for judge comparison. Postgres host `ep-sweet-violet-d2bbgdez.database.us-east-1…`.
+- ✅ **Corpus has data to evaluate.** Lakebase `generated_images` held a set of usable rows
+  (success + volume_path + prompt) with prior `ImageAnalyzer` `metrics` — a ready-made
+  baseline for judge comparison.
 - ✅ **Images are readable** from the UC Volumes under
-  `/Volumes/vision_image_gen_catalog/image_generation/vision_images/…`.
+  `/Volumes/<catalog>/<schema>/vision_images/…`.
 
 Net: the only remaining unknown is the MLflow-specific mechanic itself (does 3.15.0's
 `get_span_image` actually surface the attached image to the judge), which is what the notebook
@@ -296,15 +296,10 @@ Rationale:
   **Go/no-go gate: PASSED 2026-07-31** — see "PoC outcome" at the top. All 5 sample images
   scored on all 3 judges with image-grounded rationales.
 
-  Deployment coordinates (from the committed bundle/terraform state on 2026-07-31, defaulted
-  in the notebook widgets):
-  - workspace `fevm-vision-image-gen.cloud.databricks.com` (id `7474645956599581`)
-  - catalog/schema `vision_image_gen_catalog.image_generation`
-  - volumes `.../generated_images`, `.../vision_images`
-  - serving endpoints `image-generator`, `siglip2-so400m-embeddings`; judge/analyzer model `databricks-gpt-5-5`
-  - Lakebase `projects/vision/branches/production/endpoints/primary`, db `databricks-postgres`
-  - app `databricks-vision` → `https://databricks-vision-7474645956599581.aws.databricksapps.com`
-  - batch job id `1124036977142492`
+  Deployment coordinates come from the bundle target's variables (see `databricks.yml`) —
+  catalog/schema, the Lakebase paths, the serving endpoints (`image-generator`,
+  `siglip2-so400m-embeddings`), the judge/analyzer model (`databricks-gpt-5-5`), and the eval
+  experiment path. Fill them per workspace; nothing workspace-specific is hard-coded here.
 - **Phase 2:** port the five metrics + flags to judges; build an eval dataset from existing
   `generated_images` rows (we already have prompts + volume paths + prior scores as a
   baseline).
