@@ -73,32 +73,42 @@ def _make_pool(ws, endpoint_name: str, database: str) -> ConnectionPool:
 
 
 def _split_sql_statements(sql: str) -> list[str]:
-    """Split a multi-statement SQL script on top-level semicolons, ignoring semicolons inside
-    single-quoted string literals (with '' escapes). _SCHEMA_SQL has no dollar-quoted blocks,
-    so this simple scanner is sufficient. Line/`--` comments are stripped first."""
-    no_comments = "\n".join(
-        line for line in sql.splitlines() if not line.lstrip().startswith("--")
-    )
+    """Split a multi-statement SQL script on top-level semicolons, ignoring semicolons and `--`
+    line comments inside single-quoted string literals (with '' escapes). _SCHEMA_SQL has no
+    dollar-quoted blocks, so this single-pass scanner is sufficient. `--` comments are handled
+    inline (only when outside a string) rather than pre-stripped by line, so a literal line that
+    begins with `--` inside a string (e.g. free-text seed instructions) is preserved intact."""
     stmts: list[str] = []
     buf: list[str] = []
     in_str = False
     i = 0
-    while i < len(no_comments):
-        ch = no_comments[i]
-        if ch == "'":
-            if in_str and i + 1 < len(no_comments) and no_comments[i + 1] == "'":
-                buf.append("''")  # escaped quote inside a string literal
-                i += 2
-                continue
-            in_str = not in_str
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    buf.append("''")  # escaped quote inside a string literal
+                    i += 2
+                    continue
+                in_str = False
             buf.append(ch)
-        elif ch == ";" and not in_str:
-            stmt = "".join(buf).strip()
-            if stmt:
-                stmts.append(stmt)
-            buf = []
         else:
-            buf.append(ch)
+            if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+                # line comment (outside a string): skip to end of line, keep the newline
+                nl = sql.find("\n", i)
+                i = n if nl == -1 else nl
+                continue
+            if ch == "'":
+                in_str = True
+                buf.append(ch)
+            elif ch == ";":
+                stmt = "".join(buf).strip()
+                if stmt:
+                    stmts.append(stmt)
+                buf = []
+            else:
+                buf.append(ch)
         i += 1
     tail = "".join(buf).strip()
     if tail:

@@ -332,8 +332,18 @@ class ImageEvaluator:
         under MLflow's ~10MB cap and cuts each judge's fetch cost. Full-res stays in the Volume."""
         img = PILImage.open(BytesIO(image_bytes))
         img.thumbnail((self._max_px, self._max_px), PILImage.LANCZOS)
+        # Transparent-background images (gpt-image-1.5) are RGBA/LA/P-with-transparency. A plain
+        # convert("RGB") drops alpha and renders transparent pixels as black, so the judges would
+        # score the image against a black background. Composite onto white first to preserve intent.
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            bg = PILImage.new("RGB", rgba.size, (255, 255, 255))
+            bg.paste(rgba, mask=rgba.split()[-1])
+            img = bg
+        else:
+            img = img.convert("RGB")
         buf = BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=85)
+        img.save(buf, format="JPEG", quality=85)
         return buf.getvalue()
 
     async def _traced_analyze(
@@ -416,9 +426,13 @@ class ImageEvaluator:
 
         # The 5-cell grid judges are the enabled criterion keys. brand_conflict /
         # criteria_adherence run only when the caller supplied style criteria.
-        active = [c["key"] for c in self._criteria if c.get("enabled", True)]
+        # Only run keys that actually have a built judge: build_judges drops a criterion whose
+        # make_judge failed (per-criterion isolation), so indexing self._judges by every enabled
+        # key would KeyError and sink ALL scoring — defeating that isolation.
+        active = [c["key"] for c in self._criteria
+                  if c.get("enabled", True) and c["key"] in self._judges]
         if criteria:
-            active += ["brand_conflict", "criteria_adherence"]
+            active += [n for n in ("brand_conflict", "criteria_adherence") if n in self._judges]
 
         results = await asyncio.gather(
             *[self._run_judge(self._judges[n], trace, judge_inputs) for n in active]
