@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from ..core._eval import DEFAULT_CRITERIA
+from ..core._eval import DEFAULT_CRITERIA, validate_criterion_instructions
 from ..models import EvalCriterionOut, EvalCriterionUpdate
 
 router = APIRouter(tags=["eval-criteria"])
@@ -92,11 +92,25 @@ def update_eval_criterion(key: str, body: EvalCriterionUpdate, request: Request)
     row = existing[0]
     is_custom = bool(row["is_custom"])
 
+    # Validate BEFORE persisting: whenever instructions change OR the criterion is being
+    # enabled, the *effective* instructions must be able to produce a working image judge
+    # (non-empty, contain {{ trace }}, and pass make_judge). Without this a bad criterion would
+    # be saved, the rebuild would fail silently (200 + success toast), and eval would be
+    # disabled entirely on the next app restart. Validating on enable also blocks turning on a
+    # criterion whose stored instructions are already bad.
+    effective_instructions = body.instructions if body.instructions is not None else row["instructions"]
+    if body.instructions is not None or body.enabled:
+        cfg = request.app.state.config
+        try:
+            validate_criterion_instructions(
+                effective_instructions, cfg.judge_model, cfg.judge_reasoning_effort,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
     sets: list[str] = []
     params: list[Any] = []
     if body.instructions is not None:
-        if not body.instructions.strip():
-            raise HTTPException(400, "instructions cannot be empty")
         sets.append("instructions = %s")
         params.append(body.instructions)
     if body.label is not None:

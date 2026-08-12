@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
@@ -187,13 +188,15 @@ def load_criteria(pool) -> list[dict[str, Any]]:
         return [{**c, "enabled": c.get("enabled", True)} for c in DEFAULT_CRITERIA]
 
 
-def build_judges(model: str, reasoning_effort: str | None, criteria: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build one MLflow {{ trace }} int-0-5 judge per enabled criterion (keyed by criterion
-    key), plus the conditional brand_conflict / criteria_adherence judges (invoked only when
-    the caller supplies style criteria — separate from the 5-cell grid).
+# Our image judges MUST reference the generated image via {{ trace }} — that placeholder is
+# what lets the judge call get_span_image to fetch the attachment. make_judge itself only
+# requires *some* template variable, so a trace-less instruction would build yet score images
+# blind; we therefore require {{ trace }} explicitly. Accepts {{trace}} and {{ trace }}.
+_TRACE_VAR_RE = re.compile(r"\{\{\s*trace\s*\}\}")
 
-    Rebuilt whenever criteria change (see ImageEvaluator.refresh_criteria).
-    """
+
+def _make_judge(name: str, instructions: str, value_type: Any, model: str, reasoning_effort: str | None):
+    """Construct a single MLflow judge with the app's standard inference params."""
     from mlflow.genai.judges import make_judge
 
     inference_params = (
@@ -201,23 +204,56 @@ def build_judges(model: str, reasoning_effort: str | None, criteria: list[dict[s
         if reasoning_effort and reasoning_effort.lower() != "default"
         else None
     )
+    return make_judge(
+        name=name,
+        instructions=instructions,
+        model=model,
+        feedback_value_type=value_type,
+        inference_params=inference_params,
+    )
 
-    def _judge(name: str, instructions: str, value_type: Any):
-        return make_judge(
-            name=name,
-            instructions=instructions,
-            model=model,
-            feedback_value_type=value_type,
-            inference_params=inference_params,
+
+def validate_criterion_instructions(instructions: str | None, model: str, reasoning_effort: str | None) -> None:
+    """Validate a criterion's instructions BEFORE they are persisted. Raises ValueError with a
+    user-facing message if they can't produce a working image judge. Used by the eval-criteria
+    PATCH endpoint so invalid instructions are rejected at the door instead of silently killing
+    scoring (and disabling eval entirely on the next restart)."""
+    if instructions is None or not instructions.strip():
+        raise ValueError("Instructions cannot be empty.")
+    if not _TRACE_VAR_RE.search(instructions):
+        raise ValueError(
+            "Instructions must include the {{ trace }} placeholder so the judge can see the "
+            "generated image. Keep {{ trace }} in the text."
         )
+    # Trial build to surface any other make_judge rejection before it reaches the DB.
+    try:
+        _make_judge("_validate", instructions, int, model, reasoning_effort)
+    except Exception as exc:
+        raise ValueError(f"Invalid judge instructions: {str(exc).splitlines()[0]}") from exc
 
+
+def build_judges(model: str, reasoning_effort: str | None, criteria: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build one MLflow {{ trace }} int-0-5 judge per enabled criterion (keyed by criterion
+    key), plus the conditional brand_conflict / criteria_adherence judges (invoked only when
+    the caller supplies style criteria — separate from the 5-cell grid).
+
+    Rebuilt whenever criteria change (see ImageEvaluator.refresh_criteria). Per-criterion
+    construction is guarded: a single bad criterion (e.g. one hand-edited into the DB without
+    going through the validating PATCH endpoint) drops only its own judge instead of taking
+    down the whole set or bricking startup.
+    """
     judges: dict[str, Any] = {}
     for c in criteria:
-        if c.get("enabled", True):
-            judges[c["key"]] = _judge(c["key"], c["instructions"], int)
+        if not c.get("enabled", True):
+            continue
+        try:
+            judges[c["key"]] = _make_judge(c["key"], c["instructions"], int, model, reasoning_effort)
+        except Exception as exc:
+            logger.warning("Skipping eval criterion %r — invalid judge instructions: %s",
+                           c.get("key"), str(exc).splitlines()[0])
     # Conditional judges (criteria-driven, not part of the grid).
-    judges["brand_conflict"] = _judge("brand_conflict", _BRAND_CONFLICT_INSTRUCTIONS, str)
-    judges["criteria_adherence"] = _judge("criteria_adherence", _CRITERIA_ADHERENCE_INSTRUCTIONS, int)
+    judges["brand_conflict"] = _make_judge("brand_conflict", _BRAND_CONFLICT_INSTRUCTIONS, str, model, reasoning_effort)
+    judges["criteria_adherence"] = _make_judge("criteria_adherence", _CRITERIA_ADHERENCE_INSTRUCTIONS, int, model, reasoning_effort)
     return judges
 
 
@@ -251,29 +287,38 @@ class ImageEvaluator:
 
     def refresh_criteria(self, pool) -> None:
         """(Re)load criteria from the DB and rebuild the judge set. Called at startup, after a
-        Settings edit, and lazily per score_image (so all uvicorn workers self-heal)."""
+        Settings edit, and lazily per score_image (so all uvicorn workers self-heal).
+
+        Build-then-commit: the new criteria/signature/judges are only assigned after
+        build_judges succeeds, so a failed rebuild leaves the last-good set untouched rather
+        than half-updating state. (build_judges is itself per-criterion guarded, so this only
+        raises for a hard failure like the model/params being unusable.)"""
         if pool is not None:
             self._pool = pool
-        self._criteria = load_criteria(self._pool)
-        self._criteria_sig = self._sig(self._criteria)
-        self._judges = build_judges(
-            self._cfg.judge_model, self._cfg.judge_reasoning_effort, self._criteria,
+        criteria = load_criteria(self._pool)
+        judges = build_judges(
+            self._cfg.judge_model, self._cfg.judge_reasoning_effort, criteria,
         )
+        self._criteria = criteria
+        self._criteria_sig = self._sig(criteria)
+        self._judges = judges
 
     def _reload_if_changed(self) -> None:
         """Reload criteria from the DB and rebuild judges only if they changed. Runs at the
         start of each (background) scoring so edits made on any worker take effect everywhere,
-        without a per-image judge rebuild when nothing changed."""
+        without a per-image judge rebuild when nothing changed. Any failure leaves the
+        last-good judge set in place (best-effort)."""
         try:
             latest = load_criteria(self._pool)
-        except Exception:
-            return
-        if self._sig(latest) != self._criteria_sig:
-            self._criteria = latest
-            self._criteria_sig = self._sig(latest)
-            self._judges = build_judges(
-                self._cfg.judge_model, self._cfg.judge_reasoning_effort, self._criteria,
-            )
+            if self._sig(latest) != self._criteria_sig:
+                judges = build_judges(
+                    self._cfg.judge_model, self._cfg.judge_reasoning_effort, latest,
+                )
+                self._criteria = latest
+                self._criteria_sig = self._sig(latest)
+                self._judges = judges
+        except Exception as exc:
+            logger.warning("criteria reload failed; keeping last-good judges: %s", exc)
 
     @property
     def _custom_criterion(self) -> dict[str, Any] | None:

@@ -138,7 +138,8 @@ function EvalCriteriaTab() {
       <p className="text-sm text-muted-foreground">
         These five criteria score every generated image (shown as the metric grid on each image).
         Edit the instructions to tune scoring; the Custom criterion is yours to define and is off
-        until you enable it.
+        until you enable it. Keep the <code className="text-xs bg-muted px-1 py-0.5 rounded">{"{{ trace }}"}</code> placeholder
+        in the instructions — it's how the judge sees the generated image.
       </p>
       {criteria.map((c) => {
         const d = draftFor(c);
