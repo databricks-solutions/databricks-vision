@@ -34,9 +34,14 @@ import {
   listStyleGuidelinesKey,
   useGetSettings,
   useUpdateSettings,
+  useListEvalCriteria,
+  useUpdateEvalCriterion,
+  useResetEvalCriterion,
+  listEvalCriteriaKey,
   type StyleGuidelineOut,
   type SettingsOut,
   type SettingsUpdate,
+  type EvalCriterionOut,
 } from "@/lib/api";
 import { Save, Sparkles, Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
@@ -57,16 +62,127 @@ function SettingsPage() {
         <Tabs defaultValue="guidelines" className="w-full">
           <TabsList>
             <TabsTrigger value="guidelines">Style Guidelines</TabsTrigger>
+            <TabsTrigger value="eval">Eval Criteria</TabsTrigger>
             <TabsTrigger value="models">Model Settings</TabsTrigger>
           </TabsList>
           <TabsContent value="guidelines" className="pt-4">
             <StyleGuidelinesTab />
+          </TabsContent>
+          <TabsContent value="eval" className="pt-4">
+            <EvalCriteriaTab />
           </TabsContent>
           <TabsContent value="models" className="pt-4">
             <ModelSettingsTab />
           </TabsContent>
         </Tabs>
       </main>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────
+// Eval Criteria tab — the fixed 5 criteria behind the metric grid.
+// Built-ins: editable instructions + reset. Custom: label + instructions + enable toggle.
+// ──────────────────────────────────────────────────────────
+
+function EvalCriteriaTab() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useListEvalCriteria();
+  const criteria: EvalCriterionOut[] = data?.data ?? [];
+  const update = useUpdateEvalCriterion();
+  const reset = useResetEvalCriterion();
+
+  // Local edit buffers keyed by criterion key.
+  const [drafts, setDrafts] = useState<Record<string, { label: string; instructions: string }>>({});
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: listEvalCriteriaKey() });
+
+  function draftFor(c: EvalCriterionOut) {
+    return drafts[c.key] ?? { label: c.label, instructions: c.instructions };
+  }
+  function setDraft(key: string, patch: Partial<{ label: string; instructions: string }>) {
+    setDrafts((d) => ({ ...d, [key]: { ...(d[key] ?? {}), ...patch } as { label: string; instructions: string } }));
+  }
+
+  function save(c: EvalCriterionOut) {
+    const d = draftFor(c);
+    const body: { instructions?: string; label?: string } = {};
+    if (d.instructions !== c.instructions) body.instructions = d.instructions;
+    if (c.is_custom && d.label !== c.label) body.label = d.label;
+    if (Object.keys(body).length === 0) { toast.info("No changes"); return; }
+    if (!d.instructions.trim()) { toast.error("Instructions cannot be empty"); return; }
+    update.mutate(
+      { params: { key: c.key }, data: body },
+      { onSuccess: () => { invalidate(); toast.success(`${c.label} saved`); },
+        onError: (e) => toast.error(String(e)) },
+    );
+  }
+  function toggleEnabled(c: EvalCriterionOut, enabled: boolean) {
+    update.mutate(
+      { params: { key: c.key }, data: { enabled } },
+      { onSuccess: () => { invalidate(); toast.success(enabled ? `${c.label} enabled` : `${c.label} disabled`); },
+        onError: (e) => toast.error(String(e)) },
+    );
+  }
+  function doReset(c: EvalCriterionOut) {
+    reset.mutate(
+      { key: c.key },
+      { onSuccess: (res) => { invalidate(); setDraft(c.key, { label: res.data.label, instructions: res.data.instructions }); toast.success(`${c.label} reset to default`); },
+        onError: (e) => toast.error(String(e)) },
+    );
+  }
+
+  if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        These five criteria score every generated image (shown as the metric grid on each image).
+        Edit the instructions to tune scoring; the Custom criterion is yours to define and is off
+        until you enable it. Keep the <code className="text-xs bg-muted px-1 py-0.5 rounded">{"{{ trace }}"}</code> placeholder
+        in the instructions — it's how the judge sees the generated image.
+      </p>
+      {criteria.map((c) => {
+        const d = draftFor(c);
+        return (
+          <div key={c.key} className="rounded-md border border-border p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {c.is_custom ? (
+                  <Input
+                    className="h-7 w-40 text-sm font-medium"
+                    value={d.label}
+                    onChange={(e) => setDraft(c.key, { label: e.target.value })}
+                    placeholder="Custom label"
+                  />
+                ) : (
+                  <span className="font-medium text-sm">{c.label}</span>
+                )}
+                {c.is_custom && <Badge variant="secondary">Custom</Badge>}
+                {!c.enabled && <Badge variant="outline">Disabled</Badge>}
+              </div>
+              <div className="flex items-center gap-2">
+                {c.is_custom && (
+                  <Button variant="outline" size="sm" onClick={() => toggleEnabled(c, !c.enabled)}>
+                    {c.enabled ? "Disable" : "Enable"}
+                  </Button>
+                )}
+                {!c.is_custom && (
+                  <Button variant="ghost" size="sm" onClick={() => doReset(c)}>Reset</Button>
+                )}
+                <Button size="sm" onClick={() => save(c)} disabled={update.isPending}>
+                  <Save className="h-3.5 w-3.5 mr-1" /> Save
+                </Button>
+              </div>
+            </div>
+            <Textarea
+              className="text-xs font-mono"
+              rows={4}
+              value={d.instructions}
+              onChange={(e) => setDraft(c.key, { instructions: e.target.value })}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }

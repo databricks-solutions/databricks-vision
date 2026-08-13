@@ -36,6 +36,9 @@ variables:
   embedding_endpoint_name:
     description: "SigLIP 2 embedding endpoint name (used by the app and batch Phase-2)."
     default: siglip2-so400m-embeddings
+  eval_experiment:
+    description: "MLflow experiment path for GenAI image evaluation. Created by post-deploy.sh with artifact_location on a UC Volume so trace attachments are reachable from the app (see FEVM-391). Must be a fresh experiment name — a pre-existing one with a non-Volume artifact_location is immutable."
+    default: /Shared/databricks-vision-eval
   lakebase_endpoint:
     description: "Lakebase Autoscaling endpoint path (projects/.../endpoints/...)."
   lakebase_branch:

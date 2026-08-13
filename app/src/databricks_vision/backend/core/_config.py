@@ -45,6 +45,20 @@ class AppConfig(BaseSettings):
     default_input_fidelity: str = Field(default="high")
     default_output_format: str = Field(default="png")
 
+    # MLflow GenAI evaluation. Judges score every generated image via make_judge
+    # {{ trace }} judges (see backend/core/_eval.py). eval_experiment is injected at
+    # deploy time (DATABRICKS_VISION_EVAL_EXPERIMENT); when empty, eval is skipped and
+    # the app falls back to the plain structured analyzer output.
+    eval_experiment: str = Field(default="")
+    eval_enabled: bool = Field(default=True)
+    # Judge model must be multimodal AND accept function tools; GPT-5.x require
+    # reasoning_effort='none' with tools. Defaults to databricks:/{model_name}.
+    judge_model: str = Field(default="")
+    judge_reasoning_effort: str = Field(default="none")
+    # Images are downscaled to this max edge before becoming a trace attachment,
+    # keeping them under MLflow's ~10MB attachment cap and cutting judge fetch cost.
+    eval_image_max_px: int = Field(default=1024)
+
     @property
     def output_volume(self) -> str:
         return f"/Volumes/{self.catalog}/{self.schema_name}/generated_images"
@@ -54,6 +68,8 @@ class AppConfig(BaseSettings):
     def model_post_init(self, __context):
         if not self.vision_volume:
             self.vision_volume = f"/Volumes/{self.catalog}/{self.schema_name}/vision_images"
+        if not self.judge_model:
+            self.judge_model = f"databricks:/{self.model_name}"
 
     @property
     def static_assets_path(self) -> Path:
@@ -61,6 +77,13 @@ class AppConfig(BaseSettings):
 
     def __hash__(self) -> int:
         return hash(self.app_name)
+
+
+# --- Static assets dir ---
+# The compiled frontend lives at <package>/__dist__. We derive this here rather than
+# importing a `dist_dir` symbol from the apx-generated `_metadata.py` — newer apx versions
+# no longer emit `dist_dir`, so deriving it keeps the app buildable across apx versions.
+dist_dir = Path(str(resources.files(app_slug))).joinpath("__dist__")
 
 
 # --- Logger ---

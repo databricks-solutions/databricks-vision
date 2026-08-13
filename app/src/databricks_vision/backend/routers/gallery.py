@@ -15,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..core import Dependencies
 from ..core._background import spawn_bg
+from ..core._eval import metrics_json
 from ..core._image_gen_dep import get_sp_token
 from ..models import FolderCreate, FolderOut, GeneratedImageOut
 
@@ -34,6 +35,20 @@ def _pg_execute(pool: ConnectionPool, sql: str, params: tuple = ()) -> None:
     with pool.connection() as conn:
         conn.execute(sql, params)
         conn.commit()
+
+
+async def _score_or_analyze(request: Request, analyzer, image_bytes: bytes, prompt, criteria=None):
+    """Score an image, preferring the MLflow ImageEvaluator (traced + make_judge scoring),
+    falling back to the plain structured analyzer when eval is disabled or the judges fail.
+    Returns an ImageAnalysis. Used by the backfill / analyze / import endpoints."""
+    evaluator = getattr(request.app.state, "image_evaluator", None)
+    if evaluator is not None:
+        try:
+            return await evaluator.score_image(analyzer, image_bytes, prompt or "", criteria)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("MLflow eval failed; falling back to analyzer: %s", exc)
+    return await analyzer.analyze(image_bytes, gen_prompt=prompt, criteria=criteria)
 
 
 # --- Images (unified: batch + single) ---
@@ -321,7 +336,7 @@ async def analyze_images(
                 resp = ws.files.download(volume_path)
                 image_bytes = resp.contents.read()
 
-                analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=row.get("prompt")))
+                analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
                 embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
                 analysis = await analyze_task
                 try:
@@ -336,7 +351,6 @@ async def analyze_images(
                 thumbnail_path = f"{thumb_dir}/thumb_{row['id']}.webp"
                 ws.files.upload(thumbnail_path, BytesIO(thumbnail_bytes), overwrite=True)
 
-                metrics_json = json.dumps(analysis.metrics.model_dump())
                 _pg_execute(
                     pool,
                     """UPDATE generated_images SET
@@ -357,7 +371,7 @@ async def analyze_images(
                         json.dumps(analysis.tags),
                         thumbnail_path,
                         analysis.evaluation,
-                        metrics_json,
+                        metrics_json(analysis),
                         json.dumps(analysis.missing_or_wrong_elements),
                         json.dumps(analysis.safety_flags),
                         json.dumps(analysis.brand_conflicts),
@@ -437,7 +451,7 @@ async def analyze_single_image(
     except Exception as exc:
         raise HTTPException(500, f"Failed to download image: {exc}") from exc
 
-    analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=row.get("prompt")))
+    analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
     embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
 
     analysis = embedding = None
@@ -469,7 +483,7 @@ async def analyze_single_image(
             analysis.description,
             json.dumps(analysis.tags),
             analysis.evaluation,
-            json.dumps(analysis.metrics.model_dump()),
+            metrics_json(analysis),
             json.dumps(analysis.missing_or_wrong_elements),
             json.dumps(analysis.safety_flags),
             json.dumps(analysis.brand_conflicts),
@@ -589,7 +603,7 @@ async def _import_one_phase2(
             prompt = filename_stem  # last-resort fallback so the row has *something*
 
         analyzer = ImageAnalyzer(workspace=vw, model=cfg.model_name, openai_client=oai)
-        analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=prompt))
+        analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, prompt))
         embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
         analysis = embedding = None
         try:
@@ -613,7 +627,7 @@ async def _import_one_phase2(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     prompt, analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     embedding, batch_id,
@@ -630,7 +644,7 @@ async def _import_one_phase2(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     prompt, analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     batch_id,

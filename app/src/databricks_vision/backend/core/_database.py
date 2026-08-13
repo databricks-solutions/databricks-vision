@@ -72,16 +72,75 @@ def _make_pool(ws, endpoint_name: str, database: str) -> ConnectionPool:
     return pool
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a multi-statement SQL script on top-level semicolons, ignoring semicolons and `--`
+    line comments inside single-quoted string literals (with '' escapes). _SCHEMA_SQL has no
+    dollar-quoted blocks, so this single-pass scanner is sufficient. `--` comments are handled
+    inline (only when outside a string) rather than pre-stripped by line, so a literal line that
+    begins with `--` inside a string (e.g. free-text seed instructions) is preserved intact."""
+    stmts: list[str] = []
+    buf: list[str] = []
+    in_str = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    buf.append("''")  # escaped quote inside a string literal
+                    i += 2
+                    continue
+                in_str = False
+            buf.append(ch)
+        else:
+            if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+                # line comment (outside a string): skip to end of line, keep the newline
+                nl = sql.find("\n", i)
+                i = n if nl == -1 else nl
+                continue
+            if ch == "'":
+                in_str = True
+                buf.append(ch)
+            elif ch == ";":
+                stmt = "".join(buf).strip()
+                if stmt:
+                    stmts.append(stmt)
+                buf = []
+            else:
+                buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        stmts.append(tail)
+    return stmts
+
+
 def _bootstrap_schema(ws, endpoint_name: str, database: str) -> None:
     """Run CREATE EXTENSION + table DDL on a one-shot autocommit connection *before* opening
     the pool, so per-connection `register_vector` callbacks find the type on every connect.
+
+    Statements are executed INDIVIDUALLY (not as one multi-statement query): a single failing
+    statement — e.g. `CREATE EXTENSION` raising "must be owner" for a non-owner service
+    principal — must not abort the transaction and skip everything after it (that previously
+    left newly-added tables like eval_criteria uncreated on existing databases). Per-statement
+    "already exists"/"must be owner" errors are expected and logged at debug; anything else is
+    a warning. All DDL is idempotent (IF NOT EXISTS / ON CONFLICT).
     """
     host, user = _resolve_pg_host_user(ws, endpoint_name)
     port = os.environ.get("PGPORT", "5432")
     conninfo = f"dbname={database} user={user} host={host} port={port} sslmode=require"
     cred = ws.postgres.generate_database_credential(endpoint=endpoint_name)
     with psycopg.connect(conninfo, password=cred.token, autocommit=True) as boot:
-        boot.execute(_SCHEMA_SQL)
+        for stmt in _split_sql_statements(_SCHEMA_SQL):
+            try:
+                boot.execute(stmt)
+            except Exception as exc:
+                msg = str(exc)
+                if "must be owner" in msg or "already exists" in msg:
+                    logger.debug("Schema stmt skipped (%s): %s", msg.splitlines()[0], stmt[:60])
+                else:
+                    logger.warning("Schema stmt failed: %s | stmt: %s", msg.splitlines()[0], stmt[:80])
 
 
 class _DatabasePoolDependency(LifespanDependency):
@@ -98,13 +157,13 @@ class _DatabasePoolDependency(LifespanDependency):
         database = os.environ.get("PGDATABASE", "postgres")
 
         try:
+            # Per-statement execution (see _bootstrap_schema): individual "already exists"/
+            # "must be owner" errors are handled inside; this guard is for a hard connection
+            # failure only. Idempotent DDL means it's safe to run on every startup.
             _bootstrap_schema(ws, endpoint_name, database)
             logger.info("Lakebase schema bootstrap complete")
         except Exception as exc:
-            if "must be owner" in str(exc) or "already exists" in str(exc):
-                logger.info("Schema bootstrap skipped (tables already exist with correct schema)")
-            else:
-                logger.warning("Schema bootstrap encountered: %s", exc)
+            logger.warning("Schema bootstrap could not run (continuing): %s", exc)
 
         pool = _make_pool(ws, endpoint_name, database)
         pool.open(wait=True, timeout=30.0)

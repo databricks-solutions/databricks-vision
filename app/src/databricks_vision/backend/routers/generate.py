@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..core import Dependencies
 from ..core._background import spawn_bg
+from ..core._eval import metrics_json
 from ..core._image_gen_dep import _get_user_token, get_image_gen, get_sp_token
 from ..core._image_validation import validate_size as _validate_size
 
@@ -133,14 +134,28 @@ async def _save_and_analyze(
                 (batch_id, filename_stem, prompt, volume_path, thumbnail_path),
             )
 
-        # Phase 2 — run the structured analyzer (slow) AND compute the SigLIP
-        # embedding in parallel, then UPDATE the row with all eval columns +
-        # the embedding. Failures of either step are non-fatal — the image
-        # still shows in the gallery, just without that data.
+        # Phase 2 — score the image AND compute the SigLIP embedding in parallel, then
+        # UPDATE the row with all eval columns + the embedding. Failures of either step are
+        # non-fatal — the image still shows in the gallery, just without that data.
+        #
+        # Scoring prefers the MLflow ImageEvaluator (traces the image + runs make_judge
+        # {{ trace }} judges, mirroring the scores back into the same ImageAnalysis shape).
+        # If eval is disabled or the judges fail, we fall back to the plain structured
+        # analyzer so the gallery fields are still populated.
         if not pool:
             return
         vw = request.app.state.vision_workspace
-        analyze_task = asyncio.create_task(analyzer.analyze(image_bytes, gen_prompt=prompt, criteria=criteria))
+        evaluator = getattr(request.app.state, "image_evaluator", None)
+
+        async def _score():
+            if evaluator is not None:
+                try:
+                    return await evaluator.score_image(analyzer, image_bytes, prompt, criteria)
+                except Exception as exc:
+                    log.warning("MLflow eval failed for single-gen %s; falling back to analyzer: %s", batch_id, exc)
+            return await analyzer.analyze(image_bytes, gen_prompt=prompt, criteria=criteria)
+
+        analyze_task = asyncio.create_task(_score())
         embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
         analysis = embedding = None
         try:
@@ -166,7 +181,7 @@ async def _save_and_analyze(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     analysis.criteria_evaluation, embedding,
@@ -185,7 +200,7 @@ async def _save_and_analyze(
                    WHERE batch_id = %s AND id = 1""",
                 (
                     analysis.description, json.dumps(analysis.tags),
-                    analysis.evaluation, json.dumps(analysis.metrics.model_dump()),
+                    analysis.evaluation, metrics_json(analysis),
                     json.dumps(analysis.missing_or_wrong_elements), json.dumps(analysis.safety_flags),
                     json.dumps(analysis.brand_conflicts), analysis.improved_prompt,
                     analysis.criteria_evaluation,

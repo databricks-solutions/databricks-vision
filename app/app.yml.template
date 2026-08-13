@@ -10,5 +10,7 @@ env:
     value: "${SCHEMA_NAME}"
   - name: DATABRICKS_VISION_EMBEDDING_ENDPOINT
     value: "${EMBEDDING_ENDPOINT_NAME}"
+  - name: DATABRICKS_VISION_EVAL_EXPERIMENT
+    value: "${EVAL_EXPERIMENT}"
   - name: DATABRICKS_VISION_BATCH_GEN_JOB_ID
     valueFrom: batch-gen-job

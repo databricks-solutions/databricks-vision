@@ -12,6 +12,7 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
     "openai>=2.21.0",
+    "mlflow[databricks]>=3.15.0",  # GenAI eval: make_judge trace judges + tracing
     "sse-starlette>=2.2.0",
     "Pillow>=11.0.0",
     "httpx>=0.28.0",
@@ -31,7 +32,7 @@ image-gen = { path = "..", editable = true }
 [tool.apx.metadata]
 app-name = "databricks-vision"
 app-slug = "databricks_vision"
-app-entrypoint = "databricks_vision.backend.app:app"
+app-module = "databricks_vision.backend.app:app"
 api-prefix = "/api"
 metadata-path = "src/databricks_vision/_metadata.py"
 

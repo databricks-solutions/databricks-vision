@@ -71,6 +71,15 @@ def get_image_analyzer(request: Request) -> ImageAnalyzer:
     return ImageAnalyzer(workspace=vw, model=cfg.model_name, openai_client=oai)
 
 
+def get_image_evaluator(request: Request):
+    """Shared ImageEvaluator (or None if MLflow eval is disabled / failed to init).
+
+    Unlike ImageGen/ImageAnalyzer, the evaluator holds the judge set built once at startup
+    and is safe to share across requests (the per-request OBO analyzer is passed into
+    score_image, so identity still flows through the model calls)."""
+    return getattr(request.app.state, "image_evaluator", None)
+
+
 def _extract_sp_token(ws) -> str | None:
     try:
         auth_headers = ws.config.authenticate()
@@ -101,6 +110,31 @@ class _ImageGenDependency(LifespanDependency):
         # get_sp_token(). Tokens have ~1h TTL; callers mint a fresh one each time.
 
         logger.info("VisionWorkspace initialized (SP-bound; pool=%s)", pool is not None)
+
+        # MLflow GenAI evaluation (non-fatal): configure tracing + build the judge set once.
+        # On any failure the app falls back to the plain structured analyzer (see
+        # routers/generate.py), so generation never depends on eval being available.
+        app.state.image_evaluator = None
+        if cfg.eval_enabled and cfg.eval_experiment:
+            try:
+                from ._eval import ImageEvaluator, setup_mlflow
+
+                # The experiment is created (in post-deploy) with artifact_location on a UC
+                # Volume so trace attachments land on a path the App can reach. See setup_mlflow.
+                setup_mlflow(cfg.eval_experiment)
+                # The evaluator loads the 5 eval_criteria from the DB and builds one judge per
+                # enabled criterion; it can refresh_criteria(pool) after a Settings edit.
+                app.state.image_evaluator = ImageEvaluator(cfg, pool=pool)
+                logger.info(
+                    "ImageEvaluator ready (experiment=%s, judge_model=%s)",
+                    cfg.eval_experiment, cfg.judge_model,
+                )
+            except Exception as exc:
+                logger.warning("MLflow eval setup failed — falling back to structured analysis: %s", exc)
+        else:
+            logger.info("MLflow eval disabled (eval_enabled=%s, experiment=%r)",
+                        cfg.eval_enabled, cfg.eval_experiment)
+
         yield
 
     @staticmethod

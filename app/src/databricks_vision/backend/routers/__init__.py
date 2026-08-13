@@ -6,6 +6,7 @@ from .gallery import router as gallery_router
 from .generate import router as generate_router
 from .settings import router as settings_router
 from .style_guidelines import router as style_guidelines_router
+from .eval_criteria import router as eval_criteria_router
 
 __all__ = [
     "batches_router",
@@ -16,4 +17,5 @@ __all__ = [
     "generate_router",
     "settings_router",
     "style_guidelines_router",
+    "eval_criteria_router",
 ]

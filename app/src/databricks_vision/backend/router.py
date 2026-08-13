@@ -8,6 +8,7 @@ from .models import AppConfigOut, VersionOut
 from .routers import (
     batch_images_router,
     batches_router,
+    eval_criteria_router,
     gallery_router,
     generate_router,
     search_router,
@@ -26,6 +27,7 @@ router.include_router(gallery_router)
 router.include_router(generate_router)
 router.include_router(settings_router)
 router.include_router(style_guidelines_router)
+router.include_router(eval_criteria_router)
 
 
 @router.get("/version", response_model=VersionOut, operation_id="version")
