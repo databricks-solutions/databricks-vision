@@ -38,7 +38,7 @@ class AppConfig(BaseSettings):
 
     # AI model settings
     model_name: str = Field(default="databricks-gpt-5-5")
-    image_model: str = Field(default="gpt-image-2")
+    image_model: str = Field(default="gpt-image-2.5-flare")
     embedding_endpoint: str = Field(default="siglip2-so400m-embeddings")
     default_quality: str = Field(default="auto")
     default_resolution: str = Field(default="1024x1024")

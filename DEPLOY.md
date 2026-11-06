@@ -9,7 +9,7 @@ End-to-end guide for deploying the `databricks-vision` app to a Databricks works
 ## 1. Prerequisites
 
 ### Workspace
-- **Foundation Model serving** enabled (provides `databricks-gpt-5-5` and `gpt-image-2`/`gpt-image-1.5`).
+- **Foundation Model serving** enabled (provides `databricks-gpt-5-5` and the `gpt-image-2.6-*` / `gpt-image-2.5-*` (flare + sunburst) / `gpt-image-2` / `gpt-image-1.5` image models).
 - **Databricks Apps** enabled.
 - **GPU model serving** quota (`GPU_SMALL` / A10) for the SigLIP 2 embedding endpoint.
 - **Lakebase Autoscaling Postgres** project access (you'll provision the project in step 2a if it doesn't exist).
@@ -83,7 +83,7 @@ Run all cells. ~30 minutes for the GPU endpoint to provision. Idempotent on re-r
 
 ### 2e. Deploy the image-generator pyfunc endpoint
 
-Open `notebooks/01_MODEL_DEPLOY.py` and run all cells. ~10 minutes to register the model and deploy the `image-generator` endpoint.
+Open `notebooks/01_MODEL_DEPLOY.py` and run all cells. ~10 minutes to register the model and deploy the `image-generator` endpoint. Re-run it whenever `notebooks/image_gen_model.py` changes (e.g. after adding an image model); `deploy.sh` does not redeploy this endpoint.
 
 The notebook includes a **local smoke-test cell** that builds an inline 256×256 PNG and calls `model.predict` once. This burns a single image-generation API call but exercises the full edit-mode code path before the (slower) endpoint deploy. Skip the smoke-test cells if you'd rather not pay for that one call — the signature is defined declaratively and the deploy works without them.
 

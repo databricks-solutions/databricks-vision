@@ -58,7 +58,7 @@ _GALLERY_SELECT = """
            g.error_message, g.volume_path, g.variation_label,
            g.input_image_path, g.description, g.tags, g.thumbnail_path,
            g.evaluation, g.metrics, g.missing_elements, g.safety_flags,
-           g.brand_conflicts, g.improved_prompt, g.criteria_evaluation,
+           g.brand_conflicts, g.improved_prompt, g.criteria_evaluation, g.image_model,
            br.batch_mode, br.batch_name, br.folder, br.created_at
     FROM generated_images g
     JOIN batch_runs br ON br.batch_id = g.batch_id
@@ -542,6 +542,7 @@ def _row_to_gen_image(row: dict) -> GeneratedImageOut:
         brand_conflicts=_jsonb_list(row.get("brand_conflicts")),
         improved_prompt=row.get("improved_prompt"),
         criteria_evaluation=row.get("criteria_evaluation"),
+        image_model=row.get("image_model"),
     )
 
 

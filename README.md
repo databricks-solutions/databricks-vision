@@ -8,7 +8,7 @@ Production-ready image generation, editing, MLflow-based evaluation, and semanti
 
 ## What it does
 
-- **Generate** images with `gpt-image-2` (auto-routes to `gpt-image-1.5` for transparent backgrounds). Any WxH multiple of 16 up to 3840px, total pixels 655K–8.3M, edge ratio ≤ 3:1.
+- **Generate** images with a per-request choice of `gpt-image-2.5-flare` (default; fast), `gpt-image-2.5-sunburst` (highest detail and editing precision), `gpt-image-2.6-flare` / `gpt-image-2.6-sunburst` (add a `complexity` control for how much the model plans the scene), `gpt-image-2`, or `gpt-image-1.5`. The 2.5 and 2.6 models render transparent backgrounds natively and add `xhigh` / `max` quality; `gpt-image-2` auto-routes to `gpt-image-1.5` for transparent backgrounds. Flexible-size models accept any WxH multiple of 16 up to 3840px, total pixels 655K–8.3M, edge ratio ≤ 3:1. The model list and per-model capabilities live in `MODEL_PRESETS` in `image_gen.py`.
 - **Edit** existing images with prompt + reference. Edits land as new gallery rows.
 - **Evaluate** every generated image with **MLflow 3.15 GenAI judges** (`make_judge`, multimodal `{{ trace }}` judges that see the image via `get_span_image`): five 0-5 metric dimensions (quality, prompt, text legibility, safe content, + a user-defined *custom* criterion), each with a per-metric rationale, plus a generated improved-prompt suggestion for weak results. Judge criteria are **editable from the Settings page**; traces + scores land in an MLflow experiment. A structured `databricks-gpt-5-5` call still supplies enrichment (description, tags).
 - **Search** the corpus by text or by uploaded image. SigLIP-2 1152-dim embeddings, pgvector HNSW + cosine similarity, single-query join of metadata + similarity. FTS fallback available.
@@ -25,7 +25,7 @@ Production-ready image generation, editing, MLflow-based evaluation, and semanti
 - **Frontend** — React 19, TypeScript, TanStack Router / Query, shadcn/ui, Tailwind
 - **Storage** — Unity Catalog Volumes (image bytes + MLflow trace attachments) + Lakebase Autoscaling Postgres with pgvector (metadata, evals, embeddings)
 - **Evaluation** — MLflow 3.15 GenAI: `make_judge` multimodal `{{ trace }}` judges on `databricks-gpt-5-5`, traced to an MLflow experiment (UC-Volume artifact location); DB-managed, editable criteria
-- **Inference** — Databricks Model Serving wrapping the Responses API with `gpt-image-2` / `gpt-image-1.5`; judge + enrichment backed by `databricks-gpt-5-5`; image + text embeddings from a custom SigLIP-2 SO400M/14-384 endpoint
+- **Inference** — Databricks Model Serving wrapping the Responses API with `gpt-image-2.6-*` / `gpt-image-2.5-*` / `gpt-image-2` / `gpt-image-1.5`; judge + enrichment backed by `databricks-gpt-5-5`; image + text embeddings from a custom SigLIP-2 SO400M/14-384 endpoint
 - **Build / deploy** — Databricks Asset Bundles, [apx](https://github.com/databricks/apx) toolkit, `uv`, `bun`
 
 ## Architecture
@@ -38,7 +38,7 @@ Production-ready image generation, editing, MLflow-based evaluation, and semanti
 └─────────────┬──────────────────────┘     └────────────────────────────────────┘
               │
               ├──► Foundation Model serving
-              │     ├── gpt-image-2 / gpt-image-1.5   (generate, edit)
+              │     ├── gpt-image-2.6/2.5/2/1.5       (generate, edit)
               │     └── databricks-gpt-5-5            (enrichment + MLflow judges)
               │
               ├──► MLflow 3.15 GenAI evaluation

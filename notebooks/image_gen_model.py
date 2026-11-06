@@ -1,14 +1,14 @@
 """
-Custom MLflow pyfunc model that wraps the Responses API with gpt-image-1.5 / gpt-image-2
+Custom MLflow pyfunc model that wraps the Responses API with the gpt-image-* models
 for batch image generation.
 
 Deployed as a Model Serving endpoint and called via ai_query() for batch inference.
 Uses DatabricksOpenAI for automatic auth via injected M2M OAuth credentials.
 
-Per-row tool params (size, quality, image_model, output_format, background) flow
-through the predict signature; missing/NaN values fall back to module defaults.
-If `background == "transparent"`, model is forced to `gpt-image-1.5` (only model
-that supports transparency), mirroring `image_gen.ImageGen._build_tools`.
+Per-row tool params (size, quality, image_model, output_format, background, complexity)
+flow through the predict signature; missing/NaN values fall back to module defaults.
+If `background == "transparent"` and the model can't render transparency, the model
+falls back to `gpt-image-1.5`, mirroring `image_gen.resolve_image_model`.
 """
 
 import base64
@@ -23,10 +23,20 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_QUALITY = "low"
-DEFAULT_IMAGE_MODEL = "gpt-image-2"
+DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare"
 DEFAULT_OUTPUT_FORMAT = "png"
 DEFAULT_BACKGROUND = "opaque"
 LLM_MODEL = "databricks-gpt-5-5"
+
+# Kept in sync with image_gen.MODEL_PRESETS (this module is deployed on its own and
+# can't import image_gen).
+TRANSPARENT_FALLBACK_MODEL = "gpt-image-1.5"
+_TRANSPARENT_MODELS = {
+    "gpt-image-1.5",
+    "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+    "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+}
+_COMPLEXITY_MODELS = {"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
 
 
 def _coerce(value, default: str) -> str:
@@ -84,11 +94,13 @@ class ImageGenerator(mlflow.pyfunc.PythonModel):
         image_model: str,
         output_format: str,
         background: str,
+        complexity: str = "",
     ) -> dict:
         """Generate a single image via the Responses API."""
         try:
-            # Force gpt-image-1.5 for transparency (only model that supports it)
-            effective_model = "gpt-image-1.5" if background == "transparent" else image_model
+            effective_model = image_model
+            if background == "transparent" and image_model not in _TRANSPARENT_MODELS:
+                effective_model = TRANSPARENT_FALLBACK_MODEL
 
             input_compressed = self._compress_b64(input_b64)
 
@@ -118,6 +130,8 @@ class ImageGenerator(mlflow.pyfunc.PythonModel):
             }
             if background == "transparent":
                 tool["background"] = "transparent"
+            if complexity and effective_model in _COMPLEXITY_MODELS:
+                tool["complexity"] = complexity
 
             response = self.client.responses.create(
                 model=LLM_MODEL,
@@ -159,6 +173,7 @@ class ImageGenerator(mlflow.pyfunc.PythonModel):
                 image_model=_coerce(row.get("image_model"), DEFAULT_IMAGE_MODEL),
                 output_format=_coerce(row.get("output_format"), DEFAULT_OUTPUT_FORMAT),
                 background=_coerce(row.get("background"), DEFAULT_BACKGROUND),
+                complexity=_coerce(row.get("complexity"), ""),
             )
             results.append(result)
         return pd.DataFrame(results)

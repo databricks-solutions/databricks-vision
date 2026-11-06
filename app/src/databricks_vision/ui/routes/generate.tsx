@@ -19,7 +19,21 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { streamSSE } from "@/lib/sse";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCreateBatch, useListFolders, useListStyleGuidelines, listBatchesKey } from "@/lib/api";
+import {
+  useCreateBatch,
+  useGetSettings,
+  useListFolders,
+  useListImageModels,
+  useListStyleGuidelines,
+  listBatchesKey,
+} from "@/lib/api";
+import type { ImageModelOut } from "@/lib/api";
+import {
+  DEFAULT_QUALITIES,
+  IMAGE_MODEL_STORAGE_KEY,
+  QUALITY_LABELS,
+  resolveImageModel,
+} from "@/lib/image-models";
 import VolumeBrowserDialog from "@/components/apx/volume-browser-dialog";
 import { Sparkles, X, Upload, ImagePlus, StopCircle, FolderOpen, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -61,12 +75,12 @@ function SizeSelect({ value, onChange, className = "" }: { value: string; onChan
   );
 }
 
-// gpt-image-2 size catalogue + custom validation. Mirrors backend
-// _validate_size in routers/generate.py.
-type GptImage2PresetGroup = "1K" | "2K" | "4K";
-type GptImage2Preset = { value: string; label: string; group?: GptImage2PresetGroup };
+// Size catalogue + custom validation for flexible-size models (gpt-image-2 and newer).
+// Mirrors backend validate_size in core/_image_validation.py.
+type SizePresetGroup = "1K" | "2K" | "4K";
+type SizePreset = { value: string; label: string; group?: SizePresetGroup };
 
-const GPT_IMAGE_2_PRESETS: GptImage2Preset[] = [
+const FLEXIBLE_SIZE_PRESETS: SizePreset[] = [
   { value: "auto", label: "Auto" },
   { value: "1024x1024", label: "Square (1024)", group: "1K" },
   { value: "1536x1024", label: "Landscape (1536×1024)", group: "1K" },
@@ -77,15 +91,15 @@ const GPT_IMAGE_2_PRESETS: GptImage2Preset[] = [
   { value: "2160x3840", label: "4K Portrait (2160×3840)", group: "4K" },
 ];
 
-const GPT_IMAGE_15_VALUES = new Set(["auto", "1024x1024", "1024x1536", "1536x1024"]);
 const SIZE_CUSTOM_SENTINEL = "__custom__";
+const COMPLEXITY_DEFAULT = "default"; // Radix Select items can't use "" as a value
 
 function parseSize(s: string): [number, number] | null {
   const m = s.match(/^(\d+)x(\d+)$/);
   return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : null;
 }
 
-function validateGptImage2Size(w: number, h: number): string | null {
+function validateFlexibleSize(w: number, h: number): string | null {
   if (!Number.isFinite(w) || !Number.isFinite(h)) return "Width and height required";
   if (!Number.isInteger(w) || !Number.isInteger(h)) return "Whole numbers only";
   if (w <= 0 || h <= 0) return "Must be positive";
@@ -99,40 +113,99 @@ function validateGptImage2Size(w: number, h: number): string | null {
   return null;
 }
 
-// Picks the closest gpt-image-1.5 size to fall back to when transparent BG is enabled
-// and the current size isn't supported by gpt-image-1.5.
-function snapToTransparentSize(value: string): string {
-  if (GPT_IMAGE_15_VALUES.has(value)) return value;
+// Picks the closest supported size for a fixed-size model (gpt-image-1.5) when the
+// current size isn't one of its sizes.
+function snapToFixedSize(value: string, sizes: string[]): string {
+  if (sizes.includes(value)) return value;
   const parsed = parseSize(value);
-  if (!parsed) return "1024x1024";
-  const [w, h] = parsed;
-  if (w === h) return "1024x1024";
-  return w > h ? "1536x1024" : "1024x1536";
+  const want = !parsed || parsed[0] === parsed[1] ? "1024x1024" : parsed[0] > parsed[1] ? "1536x1024" : "1024x1536";
+  return sizes.includes(want) ? want : sizes[0];
+}
+
+// Snap quality/size to what `model` supports (e.g. after switching model or toggling
+// a transparent BG that falls back to gpt-image-1.5).
+function constrainToModel(model: ImageModelOut | undefined, quality: string, size: string) {
+  const qualities = model?.qualities ?? DEFAULT_QUALITIES;
+  return {
+    quality: qualities.includes(quality) ? quality : "auto",
+    size: model?.sizes ? snapToFixedSize(size, model.sizes) : size,
+  };
+}
+
+function ModelSelect({
+  models,
+  value,
+  onChange,
+}: {
+  models: ImageModelOut[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const selected = models.find((m) => m.id === value);
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-8 text-xs">
+        {/* Label rendered directly — the model list loads async (see the style-guideline select). */}
+        <span>{selected?.label ?? (value || "Loading…")}</span>
+      </SelectTrigger>
+      <SelectContent>
+        {models.map((m) => (
+          <SelectItem key={m.id} value={m.id} className="text-xs">
+            {m.label} <span className="text-muted-foreground">· {m.description}</span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function QualitySelect({
+  qualities,
+  value,
+  onChange,
+}: {
+  qualities: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-8 text-xs"><span>{QUALITY_LABELS[value] ?? value}</span></SelectTrigger>
+      <SelectContent>
+        {qualities.map((q) => (
+          <SelectItem key={q} value={q}>{QUALITY_LABELS[q] ?? q}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 function SizeSelectAdvanced({
   value,
   onChange,
-  transparent,
+  fixedSizes,
   onValidityChange,
 }: {
   value: string;
   onChange: (v: string) => void;
-  transparent: boolean;
+  // Sizes the serving model is limited to; null = any valid WxH (custom allowed).
+  fixedSizes: string[] | null;
   onValidityChange: (valid: boolean) => void;
 }) {
-  const isPresetValue = (v: string) => GPT_IMAGE_2_PRESETS.some((p) => p.value === v);
+  const isPresetValue = (v: string) => FLEXIBLE_SIZE_PRESETS.some((p) => p.value === v);
   const initialParse = parseSize(value);
   const [customMode, setCustomMode] = useState(() => !isPresetValue(value));
   const [customW, setCustomW] = useState(initialParse?.[0] ?? 1024);
   const [customH, setCustomH] = useState(initialParse?.[1] ?? 1024);
 
-  // Transparent BG forces gpt-image-1.5 — exit custom mode (parent will snap value).
+  // A fixed-size model (e.g. the transparent fallback) has no custom sizes — exit custom
+  // mode (parent will snap value).
+  const fixed = fixedSizes !== null;
   useEffect(() => {
-    if (transparent) setCustomMode(false);
-  }, [transparent]);
+    if (fixed) setCustomMode(false);
+  }, [fixed]);
 
-  const customError = customMode ? validateGptImage2Size(customW, customH) : null;
+  const customError = customMode ? validateFlexibleSize(customW, customH) : null;
   const valid = !customMode || customError === null;
 
   useEffect(() => {
@@ -163,11 +236,11 @@ function SizeSelectAdvanced({
   };
 
   const triggerValue = customMode ? SIZE_CUSTOM_SENTINEL : value;
-  const filterPreset = (p: GptImage2Preset) => !transparent || GPT_IMAGE_15_VALUES.has(p.value);
-  const auto = GPT_IMAGE_2_PRESETS.filter((p) => p.group === undefined && filterPreset(p));
-  const oneK = GPT_IMAGE_2_PRESETS.filter((p) => p.group === "1K" && filterPreset(p));
-  const twoK = GPT_IMAGE_2_PRESETS.filter((p) => p.group === "2K" && filterPreset(p));
-  const fourK = GPT_IMAGE_2_PRESETS.filter((p) => p.group === "4K" && filterPreset(p));
+  const filterPreset = (p: SizePreset) => !fixedSizes || fixedSizes.includes(p.value);
+  const auto = FLEXIBLE_SIZE_PRESETS.filter((p) => p.group === undefined && filterPreset(p));
+  const oneK = FLEXIBLE_SIZE_PRESETS.filter((p) => p.group === "1K" && filterPreset(p));
+  const twoK = FLEXIBLE_SIZE_PRESETS.filter((p) => p.group === "2K" && filterPreset(p));
+  const fourK = FLEXIBLE_SIZE_PRESETS.filter((p) => p.group === "4K" && filterPreset(p));
 
   return (
     <div className="space-y-1">
@@ -208,7 +281,7 @@ function SizeSelectAdvanced({
               ))}
             </SelectGroup>
           )}
-          {!transparent && (
+          {!fixed && (
             <SelectGroup>
               <SelectSeparator />
               <SelectItem value={SIZE_CUSTOM_SENTINEL} className="text-xs">Custom…</SelectItem>
@@ -271,6 +344,19 @@ function GeneratePage() {
   const { data: guidelinesData } = useListStyleGuidelines();
   const guidelines = guidelinesData?.data ?? [];
 
+  // Image model — one pick shared by Single / Edit / Batch, remembered per browser. Falls
+  // back to the server default when nothing (or a model no longer offered) is stored.
+  const { data: imageModelsData } = useListImageModels();
+  const imageModels = imageModelsData?.data ?? [];
+  const { data: settingsData } = useGetSettings();
+  const [imageModelPick, setImageModelPick] = useState(
+    () => localStorage.getItem(IMAGE_MODEL_STORAGE_KEY) ?? "",
+  );
+  const imageModelId = imageModels.some((m) => m.id === imageModelPick)
+    ? imageModelPick
+    : settingsData?.data.image_model ?? "";
+  const selectedModel = imageModels.find((m) => m.id === imageModelId);
+
   // Pick up pre-loaded image from ImageDialog "Edit" button
   useEffect(() => {
     const blobUrl = sessionStorage.getItem("edit-image-blob-url");
@@ -332,16 +418,21 @@ function GeneratePage() {
   const [outputFormat, setOutputFormat] = useState("png");
   const [folder, setFolder] = useState("default");
   const [transparent, setTransparent] = useState(false);
+  const [complexity, setComplexity] = useState(COMPLEXITY_DEFAULT);
+  // The model that will serve single/edit requests (transparent may fall back to gpt-image-1.5).
+  const singleModel = resolveImageModel(imageModels, selectedModel, transparent);
 
   const handleTransparentToggle = useCallback((checked: boolean) => {
     setTransparent(checked);
-    if (checked && !GPT_IMAGE_15_VALUES.has(size)) {
-      const snapped = snapToTransparentSize(size);
-      setSize(snapped);
-      const label = GPT_IMAGE_2_PRESETS.find((p) => p.value === snapped)?.label ?? snapped;
-      toast.info(`Switched size to ${label} — transparent BG uses gpt-image-1.5`);
+    const model = resolveImageModel(imageModels, selectedModel, checked);
+    const next = constrainToModel(model, quality, size);
+    setQuality(next.quality);
+    if (next.size !== size) {
+      setSize(next.size);
+      const label = FLEXIBLE_SIZE_PRESETS.find((p) => p.value === next.size)?.label ?? next.size;
+      toast.info(`Switched size to ${label} — transparent BG uses ${model?.id}`);
     }
-  }, [size]);
+  }, [imageModels, selectedModel, quality, size]);
   // Apply the DB-marked default the first time the guidelines list arrives.
   // After that the value is whatever the user has explicitly chosen.
   const [styleGuidelineId, setStyleGuidelineId] = useState<string>("none");
@@ -378,14 +469,27 @@ function GeneratePage() {
   const [batchTransparent, setBatchTransparent] = useState(false);
   const [batchStyleGuidelineId, setBatchStyleGuidelineId] = useState<string>("none");
 
-  // Transparent BG forces gpt-image-1.5 + snaps to a supported size, mirroring single-gen.
+  const batchModel = resolveImageModel(imageModels, selectedModel, batchTransparent);
+
+  // Transparent BG may fall back to gpt-image-1.5 + snap to a supported size, mirroring single-gen.
   const handleBatchTransparentToggle = useCallback((checked: boolean) => {
     setBatchTransparent(checked);
-    if (checked) {
-      const snapped = snapToTransparentSize(batchSize);
-      if (snapped !== batchSize) setBatchSize(snapped);
-    }
-  }, [batchSize]);
+    const next = constrainToModel(resolveImageModel(imageModels, selectedModel, checked), batchQuality, batchSize);
+    setBatchQuality(next.quality);
+    if (next.size !== batchSize) setBatchSize(next.size);
+  }, [imageModels, selectedModel, batchQuality, batchSize]);
+
+  const handleImageModelChange = useCallback((id: string) => {
+    setImageModelPick(id);
+    localStorage.setItem(IMAGE_MODEL_STORAGE_KEY, id);
+    const model = imageModels.find((m) => m.id === id);
+    const single = constrainToModel(resolveImageModel(imageModels, model, transparent), quality, size);
+    setQuality(single.quality);
+    setSize(single.size);
+    const batch = constrainToModel(resolveImageModel(imageModels, model, batchTransparent), batchQuality, batchSize);
+    setBatchQuality(batch.quality);
+    setBatchSize(batch.size);
+  }, [imageModels, transparent, quality, size, batchTransparent, batchQuality, batchSize]);
 
   const [variations, setVariations] = useState<VariationRow[]>([
     { label: "", prompt: "", edited: false },
@@ -420,6 +524,7 @@ function GeneratePage() {
       if (mode === "edit") {
         for (const file of uploadedImages.slice(0, 4)) formData.append("images", file);
       }
+      if (imageModelId) formData.set("image_model", imageModelId);
       const res = await fetch("/api/rewrite", { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -433,7 +538,7 @@ function GeneratePage() {
     } finally {
       setEnhancing(false);
     }
-  }, [prompt, mode, uploadedImages]);
+  }, [prompt, mode, uploadedImages, imageModelId]);
 
   const handleRevert = useCallback(() => {
     if (originalPrompt === null) return;
@@ -451,6 +556,7 @@ function GeneratePage() {
       try {
         const formData = new FormData();
         formData.set("prompt", current.trim());
+        if (imageModelId) formData.set("image_model", imageModelId);
         const res = await fetch("/api/rewrite", { method: "POST", body: formData });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
@@ -464,7 +570,7 @@ function GeneratePage() {
         setEnhancingBatch(false);
       }
     },
-    [],
+    [imageModelId],
   );
 
   const handleSingleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -481,6 +587,10 @@ function GeneratePage() {
     formData.set("quality", quality);
     formData.set("size", size);
     formData.set("output_format", outputFormat);
+    if (imageModelId) formData.set("image_model", imageModelId);
+    if (singleModel?.supports_complexity && complexity !== COMPLEXITY_DEFAULT) {
+      formData.set("complexity", complexity);
+    }
     if (mode === "single" || mode === "edit") {
       formData.set("background", transparent ? "transparent" : "auto");
     }
@@ -541,7 +651,7 @@ function GeneratePage() {
       onError: (_index, error) => toast.error(`Generation failed: ${error}`),
     }, () => setGenerating(false));
     stopRef.current = cleanup;
-  }, [prompt, n, folder, quality, size, outputFormat, transparent, styleGuidelineId, guidelines, mode, uploadedImages, queryClient]);
+  }, [prompt, n, folder, quality, size, outputFormat, imageModelId, singleModel, complexity, transparent, styleGuidelineId, guidelines, mode, uploadedImages, queryClient]);
 
   const updateVariationLabel = useCallback((index: number, label: string) => {
     setVariations((prev) =>
@@ -560,10 +670,10 @@ function GeneratePage() {
 
   const handleBatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Transparent BG forces gpt-image-1.5 server-side too; we still send the user
-    // selection so batch_runs records what was asked for.
+    // Send the picked model; the backend applies the transparent fallback (if any) and
+    // records the model that actually serves the batch.
     const background = batchTransparent ? "transparent" : "opaque";
-    const image_model = batchTransparent ? "gpt-image-1.5" : "gpt-image-2";
+    const image_model = imageModelId;
     const style_guideline_id =
       batchStyleGuidelineId !== "none" ? Number(batchStyleGuidelineId) : null;
 
@@ -721,13 +831,17 @@ function GeneratePage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1 col-span-2">
+                  <Label className="text-xs">Model</Label>
+                  <ModelSelect models={imageModels} value={imageModelId} onChange={handleImageModelChange} />
+                </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Quality</Label>
-                  <Select value={quality} onValueChange={setQuality}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">Auto</SelectItem><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select>
+                  <QualitySelect qualities={singleModel?.qualities ?? DEFAULT_QUALITIES} value={quality} onChange={setQuality} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Size</Label>
-                  <SizeSelectAdvanced value={size} onChange={setSize} transparent={transparent} onValidityChange={setSizeValid} />
+                  <SizeSelectAdvanced value={size} onChange={setSize} fixedSizes={singleModel?.sizes ?? null} onValidityChange={setSizeValid} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Format</Label>
@@ -737,6 +851,20 @@ function GeneratePage() {
                   <Label className="text-xs">Count</Label>
                   <Select value={String(n)} onValueChange={(v) => setN(Number(v))}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 4].map((i) => (<SelectItem key={i} value={String(i)}>{i}</SelectItem>))}</SelectContent></Select>
                 </div>
+                {singleModel?.supports_complexity && (
+                  <div className="space-y-1 col-span-2">
+                    <Label className="text-xs">Complexity <span className="text-muted-foreground">(how much the model plans the scene)</span></Label>
+                    <Select value={complexity} onValueChange={setComplexity}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={COMPLEXITY_DEFAULT}>Model default</SelectItem>
+                        <SelectItem value="low">Low — quick edits</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High — many elements or constraints</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               {(mode === "single" || mode === "edit") && (
@@ -749,8 +877,8 @@ function GeneratePage() {
                       className="rounded border-input"
                     />
                     <span>Transparent background</span>
-                    {transparent && (
-                      <span className="text-muted-foreground">— uses gpt-image-1.5</span>
+                    {transparent && singleModel && singleModel.id !== imageModelId && (
+                      <span className="text-muted-foreground">— uses {singleModel.id}</span>
                     )}
                   </label>
                   <div className="space-y-1">
@@ -854,26 +982,26 @@ function GeneratePage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1 col-span-2">
+                  <Label className="text-xs">Model</Label>
+                  <ModelSelect models={imageModels} value={imageModelId} onChange={handleImageModelChange} />
+                </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Size</Label>
                   <SizeSelectAdvanced
                     value={batchSize}
                     onChange={setBatchSize}
-                    transparent={batchTransparent}
+                    fixedSizes={batchModel?.sizes ?? null}
                     onValidityChange={setBatchSizeValid}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Quality</Label>
-                  <Select value={batchQuality} onValueChange={setBatchQuality}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <QualitySelect
+                    qualities={batchModel?.qualities ?? DEFAULT_QUALITIES}
+                    value={batchQuality}
+                    onChange={setBatchQuality}
+                  />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Format</Label>
@@ -918,8 +1046,8 @@ function GeneratePage() {
                   className="rounded border-input"
                 />
                 <span>Transparent background</span>
-                {batchTransparent && (
-                  <span className="text-muted-foreground">— uses gpt-image-1.5</span>
+                {batchTransparent && batchModel && batchModel.id !== imageModelId && (
+                  <span className="text-muted-foreground">— uses {batchModel.id}</span>
                 )}
               </label>
 

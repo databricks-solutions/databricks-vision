@@ -19,7 +19,7 @@ from ..core import Dependencies
 from ..core._background import spawn_bg
 from ..core._eval import metrics_json
 from ..core._image_gen_dep import _get_user_token, get_image_gen, get_sp_token
-from ..core._image_validation import validate_size as _validate_size
+from ..core._image_validation import validate_image_model, validate_tool_request
 
 router = APIRouter(tags=["generate"])
 
@@ -83,6 +83,7 @@ async def _save_and_analyze(
     prompt: str,
     folder: str,
     is_edit: bool,
+    tool_meta: dict[str, str],
     criteria: str | None = None,
 ) -> None:
     """Background task: write the gallery row immediately, then run the analyzer
@@ -91,6 +92,9 @@ async def _save_and_analyze(
     Writing the row first means a freshly-generated image shows up in the
     gallery within ~2 seconds; the slower structured eval call (5-10s) no
     longer blocks visibility.
+
+    `tool_meta` (image_model, size, quality, output_format, background) is recorded on
+    the batch_runs row so "regenerate" replays the same settings.
     """
     import logging
     log = logging.getLogger(__name__)
@@ -122,16 +126,21 @@ async def _save_and_analyze(
                 pool,
                 """INSERT INTO batch_runs
                    (batch_id, batch_name, batch_mode, status, created_at,
-                    total_images, successful_images, output_volume_path, folder)
-                   VALUES (%s, %s, %s, 'completed', NOW(), 1, 1, %s, %s)""",
-                (batch_id, prompt[:100], mode, f"{cfg.vision_volume}/{folder}/{batch_id}", folder),
+                    total_images, successful_images, output_volume_path, folder,
+                    image_model, size, quality, output_format, background)
+                   VALUES (%s, %s, %s, 'completed', NOW(), 1, 1, %s, %s, %s, %s, %s, %s, %s)""",
+                (batch_id, prompt[:100], mode, f"{cfg.vision_volume}/{folder}/{batch_id}", folder,
+                 tool_meta["image_model"], tool_meta["size"], tool_meta["quality"],
+                 tool_meta["output_format"], tool_meta["background"]),
             )
             _pg_execute(
                 pool,
                 """INSERT INTO generated_images
-                   (id, batch_id, image_name, prompt, status, volume_path, thumbnail_path)
-                   VALUES (1, %s, %s, %s, 'success', %s, %s)""",
-                (batch_id, filename_stem, prompt, volume_path, thumbnail_path),
+                   (id, batch_id, image_name, prompt, status, volume_path, thumbnail_path,
+                    image_model, size)
+                   VALUES (1, %s, %s, %s, 'success', %s, %s, %s, %s)""",
+                (batch_id, filename_stem, prompt, volume_path, thumbnail_path,
+                 tool_meta["image_model"], tool_meta["size"]),
             )
 
         # Phase 2 — score the image AND compute the SigLIP embedding in parallel, then
@@ -228,10 +237,13 @@ async def generate_images(
     output_format: str = Form("png"),
     background: str = Form("auto"),
     criteria: str = Form(""),
+    image_model: str = Form(""),
+    complexity: str = Form(""),
 ):
-    _validate_size(size, transparent=(background == "transparent"))
+    image_model = image_model or request.app.state.config.image_model
+    effective_model = validate_tool_request(image_model, background, quality, size, complexity)
 
-    image_gen = get_image_gen(request)
+    image_gen = get_image_gen(request, image_model)
     user_ws = _get_user_ws_from_request(request)
     analyzer = _create_obo_analyzer(request)
 
@@ -240,6 +252,12 @@ async def generate_images(
         "size": size,
         "output_format": output_format,
         "background": background,
+    }
+    if complexity:
+        tool_overrides["complexity"] = complexity
+    tool_meta = {
+        "image_model": effective_model, "size": size, "quality": quality,
+        "output_format": output_format, "background": background,
     }
     ext = _OUTPUT_FORMAT_TO_EXT.get(output_format, ".png")
     crit = criteria.strip() or None
@@ -261,7 +279,8 @@ async def generate_images(
                 }
                 img_bytes = base64.b64decode(event.bytes_b64)
                 spawn_bg(_save_and_analyze(
-                    request, user_ws, analyzer, img_bytes, ext, prompt, folder, False, crit,
+                    request, user_ws, analyzer, img_bytes, ext, prompt, folder, False,
+                    tool_meta, crit,
                 ))
                 completed += 1
             elif event.type == "error":
@@ -281,11 +300,13 @@ async def rewrite_prompt(
     prompt: str = Form(""),
     instructions: str = Form(""),
     images: list[UploadFile] = Form(default=[]),
+    image_model: str = Form(""),
 ):
     """Rewrite a generation prompt using ImageGen.rewrite — text-only, image-conditioned,
     or image-driven synthesis depending on which inputs the FE sends.
     """
-    image_gen = get_image_gen(request)
+    image_model = image_model or request.app.state.config.image_model
+    image_gen = get_image_gen(request, validate_image_model(image_model))
     image_bytes_list = []
     for upload in images[:4]:
         image_bytes_list.append(await upload.read())
@@ -322,8 +343,13 @@ async def edit_images(
     # them later for a "view source" link via dedicated columns.
     source_batch_id: str | None = Form(default=None),  # noqa: ARG001
     source_image_id: int | None = Form(default=None),  # noqa: ARG001
+    image_model: str = Form(""),
+    complexity: str = Form(""),
 ):
-    image_gen = get_image_gen(request)
+    image_model = image_model or request.app.state.config.image_model
+    effective_model = validate_tool_request(image_model, background, quality, size, complexity)
+
+    image_gen = get_image_gen(request, image_model)
     user_ws = _get_user_ws_from_request(request)
     analyzer = _create_obo_analyzer(request)
 
@@ -335,14 +361,18 @@ async def edit_images(
     if not image_bytes_list:
         raise HTTPException(400, "At least one image is required for editing")
 
-    _validate_size(size, transparent=(background == "transparent"))
-
     tool_overrides = {
         "quality": quality,
         "size": size,
         "output_format": output_format,
         "input_fidelity": input_fidelity,
         "background": background,
+    }
+    if complexity:
+        tool_overrides["complexity"] = complexity
+    tool_meta = {
+        "image_model": effective_model, "size": size, "quality": quality,
+        "output_format": output_format, "background": background,
     }
     ext = _OUTPUT_FORMAT_TO_EXT.get(output_format, ".png")
     crit = criteria.strip() or None
@@ -369,7 +399,8 @@ async def edit_images(
                 # never let users browse those versions for single-image flows, and it
                 # produced inconsistent gallery state (stale thumbnail/metadata vs. new image).
                 spawn_bg(_save_and_analyze(
-                    request, user_ws, analyzer, img_bytes, ext, prompt, folder, True, crit,
+                    request, user_ws, analyzer, img_bytes, ext, prompt, folder, True,
+                    tool_meta, crit,
                 ))
                 completed += 1
             elif event.type == "error":

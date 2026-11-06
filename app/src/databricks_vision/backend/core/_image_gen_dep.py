@@ -49,8 +49,11 @@ def get_workspace(request: Request) -> VisionWorkspace:
     return request.app.state.vision_workspace
 
 
-def get_image_gen(request: Request) -> ImageGen:
-    """Per-request ImageGen — uses the caller's OBO token for OpenAI / Responses calls."""
+def get_image_gen(request: Request, image_model: str | None = None) -> ImageGen:
+    """Per-request ImageGen — uses the caller's OBO token for OpenAI / Responses calls.
+
+    `image_model` is the caller's per-request choice; falls back to the configured default.
+    """
     vw: VisionWorkspace = request.app.state.vision_workspace
     cfg = request.app.state.config
     oai = vw.openai_for_token(_get_user_token(request))
@@ -58,7 +61,7 @@ def get_image_gen(request: Request) -> ImageGen:
         workspace=vw,
         output_root=cfg.output_volume,
         reasoning_model=cfg.model_name,
-        image_model=cfg.image_model,
+        image_model=image_model or cfg.image_model,
         openai_client=oai,
     )
 

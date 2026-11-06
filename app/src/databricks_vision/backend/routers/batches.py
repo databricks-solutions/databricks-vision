@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from ..core import Dependencies
-from ..core._image_validation import validate_size
+from ..core._image_validation import validate_tool_request
 from ..models import (
     BatchCreate,
     BatchDetailOut,
@@ -72,7 +72,12 @@ def create_batch(
 
     size = body.size or "1024x1024"
     background = body.background or "opaque"
-    validate_size(size, transparent=(background == "transparent"))
+    quality = body.quality or "low"
+    # Record + send the model that will actually serve the batch: transparent BG falls back
+    # to gpt-image-1.5 only for models without transparency, mirroring ImageGen._build_tools.
+    image_model = validate_tool_request(
+        body.image_model or config.image_model, background, quality, size,
+    )
 
     batch_id = str(uuid.uuid4())[:8]
     try:
@@ -92,10 +97,6 @@ def create_batch(
         )
 
     batch_name = body.batch_name or ""
-    quality = body.quality or "low"
-    # Transparent BG forces gpt-image-1.5 (only model that supports transparency),
-    # mirroring image_gen.ImageGen._build_tools.
-    image_model = "gpt-image-1.5" if background == "transparent" else (body.image_model or "gpt-image-2")
     output_format = body.output_format or "png"
     style_guideline_id = body.style_guideline_id
 
@@ -338,7 +339,7 @@ def regenerate_image(
 
     size = batch.get("size") or "1024x1024"
     quality = batch.get("quality") or "low"
-    image_model = batch.get("image_model") or "gpt-image-2"
+    image_model = batch.get("image_model") or config.image_model
     output_format = batch.get("output_format") or "png"
     background = batch.get("background") or "opaque"
     try:

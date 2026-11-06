@@ -30,7 +30,7 @@ class BatchCreate(BaseModel):
     prompt_template: str = ""
     size: str = "1024x1024"
     quality: str = "low"
-    image_model: str = "gpt-image-2"
+    image_model: str = ""  # empty = the app's configured default
     output_format: str = "png"
     background: str = "opaque"
     style_guideline_id: int | None = None
@@ -84,6 +84,8 @@ class GeneratedImageOut(BaseModel):
     brand_conflicts: list[str] = []
     improved_prompt: str | None = None
     criteria_evaluation: str | None = None
+    # Model that produced the image (NULL for rows created before it was recorded).
+    image_model: str | None = None
 
 
 class ImageVersionOut(BaseModel):
@@ -185,6 +187,16 @@ class EvalCriterionUpdate(BaseModel):
 
 
 # --- Settings models ---
+
+class ImageModelOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    qualities: list[str]
+    sizes: list[str] | None = None  # None = flexible WxH (see _image_validation.validate_size)
+    supports_transparent: bool
+    supports_complexity: bool
+
 
 class SettingsOut(BaseModel):
     model_name: str

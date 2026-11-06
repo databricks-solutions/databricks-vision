@@ -58,6 +58,7 @@ input_schema = Schema(
         ColSpec("string", "image_model", required=False),
         ColSpec("string", "output_format", required=False),
         ColSpec("string", "background", required=False),
+        ColSpec("string", "complexity", required=False),
     ]
 )
 
@@ -109,7 +110,7 @@ sample = pd.DataFrame([{
     "prompt": "Replace this image with a red apple on a clean white background, studio photography",
     "size": "1024x1024",
     "quality": "low",
-    "image_model": "gpt-image-2",
+    "image_model": "gpt-image-2.5-flare",
     "output_format": "png",
     "background": "opaque",
 }])

@@ -63,7 +63,9 @@ export interface Body_analyzeGalleryImages {
 }
 export interface Body_editImages {
     background?: string;
+    complexity?: string;
     folder?: string;
+    image_model?: string;
     images?: string[];
     input_fidelity?: string;
     n?: number;
@@ -76,8 +78,10 @@ export interface Body_editImages {
 }
 export interface Body_generateImages {
     background?: string;
+    complexity?: string;
     criteria?: string;
     folder?: string;
+    image_model?: string;
     n?: number;
     output_format?: string;
     prompt: string;
@@ -89,6 +93,7 @@ export interface Body_importImages {
     images?: string[];
 }
 export interface Body_rewritePrompt {
+    image_model?: string;
     images?: string[];
     instructions?: string;
     prompt?: string;
@@ -131,6 +136,7 @@ export interface GeneratedImageOut {
     evaluation?: string | null;
     folder?: string | null;
     id?: number | null;
+    image_model?: string | null;
     image_name?: string | null;
     improved_prompt?: string | null;
     input_image_path?: string | null;
@@ -147,6 +153,15 @@ export interface GeneratedImageOut {
 }
 export interface HTTPValidationError {
     detail?: ValidationError[];
+}
+export interface ImageModelOut {
+    description: string;
+    id: string;
+    label: string;
+    qualities: string[];
+    sizes?: string[] | null;
+    supports_complexity: boolean;
+    supports_transparent: boolean;
 }
 export interface ImageVersionOut {
     batch_id: string;
@@ -1846,6 +1861,58 @@ export function useGetSettingsSuspense<TData = {
     return useSuspenseQuery({
         queryKey: getSettingsKey(),
         queryFn: ()=>getSettings(),
+        ...options?.query
+    });
+}
+export const listImageModels = async (options?: RequestInit): Promise<{
+    data: ImageModelOut[];
+}> =>{
+    const res = await fetch("/api/settings/image-models", {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const listImageModelsKey = ()=>{
+    return [
+        "/api/settings/image-models"
+    ] as const;
+};
+export function useListImageModels<TData = {
+    data: ImageModelOut[];
+}>(options?: {
+    query?: Omit<UseQueryOptions<{
+        data: ImageModelOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listImageModelsKey(),
+        queryFn: ()=>listImageModels(),
+        ...options?.query
+    });
+}
+export function useListImageModelsSuspense<TData = {
+    data: ImageModelOut[];
+}>(options?: {
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: ImageModelOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: listImageModelsKey(),
+        queryFn: ()=>listImageModels(),
         ...options?.query
     });
 }
