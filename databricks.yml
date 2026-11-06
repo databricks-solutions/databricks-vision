@@ -31,7 +31,7 @@ variables:
   schema_name:
     description: "Unity Catalog schema for generated_images/vision_images volumes."
   serving_endpoint_name:
-    description: "Model serving endpoint that serves gpt-image-* (used by the batch job)."
+    description: "Model serving endpoint wrapping the gpt-image-* models (used by the batch job)."
     default: image-generator
   embedding_endpoint_name:
     description: "SigLIP 2 embedding endpoint name (used by the app and batch Phase-2)."
@@ -130,6 +130,18 @@ resources:
           default: ""
         - name: created_by
           default: ""
+        # Image-tool params sent per run by routers/batches.py. Defaults mirror the
+        # 02_BATCH_GENERATE widgets.
+        - name: size
+          default: "1024x1024"
+        - name: quality
+          default: "low"
+        - name: image_model
+          default: "gpt-image-2.5-flare"
+        - name: output_format
+          default: "png"
+        - name: background
+          default: "opaque"
         - name: catalog
           default: ${var.catalog}
         - name: schema_name
@@ -160,6 +172,11 @@ resources:
               prompt_template: "{{job.parameters.prompt_template}}"
               variations_json: "{{job.parameters.variations_json}}"
               batch_name: "{{job.parameters.batch_name}}"
+              size: "{{job.parameters.size}}"
+              quality: "{{job.parameters.quality}}"
+              image_model: "{{job.parameters.image_model}}"
+              output_format: "{{job.parameters.output_format}}"
+              background: "{{job.parameters.background}}"
               catalog: "{{job.parameters.catalog}}"
               schema_name: "{{job.parameters.schema_name}}"
               serving_endpoint_name: "{{job.parameters.serving_endpoint_name}}"

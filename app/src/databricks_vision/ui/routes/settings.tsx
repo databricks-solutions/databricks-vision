@@ -34,6 +34,7 @@ import {
   listStyleGuidelinesKey,
   useGetSettings,
   useUpdateSettings,
+  useListImageModels,
   useListEvalCriteria,
   useUpdateEvalCriterion,
   useResetEvalCriterion,
@@ -43,6 +44,7 @@ import {
   type SettingsUpdate,
   type EvalCriterionOut,
 } from "@/lib/api";
+import { IMAGE_MODEL_STORAGE_KEY } from "@/lib/image-models";
 import { Save, Sparkles, Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
@@ -420,6 +422,8 @@ function GuidelineDialog({
 
 function ModelSettingsTab() {
   const { data: settingsData } = useGetSettings();
+  const { data: imageModelsData } = useListImageModels();
+  const imageModels = imageModelsData?.data ?? [];
   const updateSettingsMutation = useUpdateSettings();
   const [form, setForm] = useState<Partial<SettingsOut>>({});
 
@@ -429,7 +433,12 @@ function ModelSettingsTab() {
 
   function handleSave() {
     updateSettingsMutation.mutate(form as SettingsUpdate, {
-      onSuccess: () => toast.success("Settings saved"),
+      onSuccess: () => {
+        // Also make it this browser's Generate-page pick — that pick is sent per request,
+        // so it wins over the server default.
+        if (form.image_model) localStorage.setItem(IMAGE_MODEL_STORAGE_KEY, form.image_model);
+        toast.success("Settings saved");
+      },
       onError: (err: { message?: string }) => toast.error(`Failed: ${err.message ?? "unknown"}`),
     });
   }
@@ -454,14 +463,21 @@ function ModelSettingsTab() {
         <p className="text-xs text-muted-foreground">Used for analysis and prompt enhancement.</p>
       </div>
       <div className="space-y-1.5">
-        <Label>Image Model</Label>
+        <Label>Default Image Model</Label>
         <Select value={form.image_model ?? ""} onValueChange={(v) => setForm((f) => ({ ...f, image_model: v }))}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectTrigger>
+            {/* Label rendered directly — the model list loads async. */}
+            <span>{imageModels.find((m) => m.id === form.image_model)?.label ?? form.image_model}</span>
+          </SelectTrigger>
           <SelectContent>
-            <SelectItem value="gpt-image-2">gpt-image-2</SelectItem>
-            <SelectItem value="gpt-image-1.5">gpt-image-1.5</SelectItem>
+            {imageModels.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.label} <span className="text-muted-foreground">· {m.description}</span>
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">Pre-selected on the Generate page; can be changed per generation there.</p>
       </div>
       <div className="space-y-1.5">
         <Label>Generate Volume</Label>

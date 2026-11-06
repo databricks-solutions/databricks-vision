@@ -36,21 +36,103 @@ from pydantic import BaseModel, Field
 
 EMBEDDING_DIM = 1152
 
+DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare"
+# Used for background='transparent' when the selected model can't render transparency.
+TRANSPARENT_FALLBACK_MODEL = "gpt-image-1.5"
+
+_BASE_QUALITIES = ("auto", "low", "medium", "high")
+_EXTENDED_QUALITIES = (*_BASE_QUALITIES, "xhigh", "max")
+_GPT_IMAGE_15_SIZES = ("auto", "1024x1024", "1024x1536", "1536x1024")
+
+# Single source of truth for which image models the lib + app offer and what each supports.
+# `sizes=None` means "flexible": any WxH with multiples of 16, max edge 3840px, ratio ≤ 3:1,
+# and 655,360–8,294,400 total pixels (popular: 1024x1024, 1536x1024, 1024x1536, 2048x2048,
+# 2048x1152, 3840x2160, 2160x3840). `enabled=False` keeps a model out of every picker and
+# makes ImageGen reject it — flip it once the workspace's Responses API serves the model.
 MODEL_PRESETS = {
-    "gpt-image-1.5": {
-        "defaults": {"quality": "auto", "size": "1536x1024", "partial_images": 3},
+    "gpt-image-2.5-flare": {
+        "label": "GPT Image 2.5 Flare",
+        "description": "Fast, high-quality everyday generation",
+        "defaults": {"quality": "auto", "size": "auto", "partial_images": 3},
+        "qualities": _EXTENDED_QUALITIES,
+        "sizes": None,
         "supports_transparent": True,
-        "supports_input_fidelity": True,
+        "supports_input_fidelity": False,
+        "supports_complexity": False,
+        "enabled": True,
+    },
+    "gpt-image-2.5-sunburst": {
+        "label": "GPT Image 2.5 Sunburst",
+        "description": "Highest detail and editing precision; slower",
+        "defaults": {"quality": "auto", "size": "auto", "partial_images": 3},
+        "qualities": _EXTENDED_QUALITIES,
+        "sizes": None,
+        "supports_transparent": True,
+        "supports_input_fidelity": False,
+        "supports_complexity": False,
+        "enabled": True,
+    },
+    "gpt-image-2.6-flare": {
+        "label": "GPT Image 2.6 Flare",
+        "description": "Fastest generation; adds a complexity control",
+        "defaults": {"quality": "auto", "size": "auto", "partial_images": 3},
+        "qualities": _EXTENDED_QUALITIES,
+        "sizes": None,
+        "supports_transparent": True,
+        "supports_input_fidelity": False,
+        "supports_complexity": True,
+        "enabled": True,
+    },
+    "gpt-image-2.6-sunburst": {
+        "label": "GPT Image 2.6 Sunburst",
+        "description": "Most consistent across edits; adds a complexity control",
+        "defaults": {"quality": "auto", "size": "auto", "partial_images": 3},
+        "qualities": _EXTENDED_QUALITIES,
+        "sizes": None,
+        "supports_transparent": True,
+        "supports_input_fidelity": False,
+        "supports_complexity": True,
+        "enabled": True,
     },
     "gpt-image-2": {
-        # size accepts any resolution satisfying the gpt-image-2 constraints
-        # (multiples of 16, max edge 3840px, ratio ≤ 3:1, 655,360–8,294,400 total pixels).
-        # Popular: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 2048x1152, 3840x2160, 2160x3840.
+        "label": "GPT Image 2",
+        "description": "Flexible sizes up to 4K; no transparent backgrounds",
         "defaults": {"quality": "auto", "size": "auto", "partial_images": 3},
+        "qualities": _BASE_QUALITIES,
+        "sizes": None,
         "supports_transparent": False,
         "supports_input_fidelity": False,
+        "supports_complexity": False,
+        "enabled": True,
+    },
+    "gpt-image-1.5": {
+        "label": "GPT Image 1.5",
+        "description": "Fixed sizes; supports input fidelity",
+        "defaults": {"quality": "auto", "size": "1536x1024", "partial_images": 3},
+        "qualities": _BASE_QUALITIES,
+        "sizes": _GPT_IMAGE_15_SIZES,
+        "supports_transparent": True,
+        "supports_input_fidelity": True,
+        "supports_complexity": False,
+        "enabled": True,
     },
 }
+
+
+def enabled_image_models() -> list[str]:
+    """Image model ids available to callers, in display order."""
+    return [m for m, preset in MODEL_PRESETS.items() if preset["enabled"]]
+
+
+def resolve_image_model(image_model: str, background: str | None = None) -> str:
+    """Return the model that will actually serve a request.
+
+    `background='transparent'` falls back to TRANSPARENT_FALLBACK_MODEL only when the
+    selected model can't render transparency (today: gpt-image-2).
+    """
+    if background == "transparent" and not MODEL_PRESETS[image_model]["supports_transparent"]:
+        return TRANSPARENT_FALLBACK_MODEL
+    return image_model
 
 _SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -627,7 +709,7 @@ class ImageGen:
         workspace: VisionWorkspace,
         output_root: str,
         reasoning_model: str = "databricks-gpt-5-5",
-        image_model: str = "gpt-image-2",
+        image_model: str = DEFAULT_IMAGE_MODEL,
         thumb_max_width: int = 768,
         refresh_interval: float = 5.0,
         analyzer: "ImageAnalyzer | None" = None,
@@ -644,9 +726,9 @@ class ImageGen:
                 edit/rewrite use it while Lakebase + SigLIP keep using the workspace's SP-bound
                 client.
         """
-        if image_model not in MODEL_PRESETS:
+        if image_model not in MODEL_PRESETS or not MODEL_PRESETS[image_model]["enabled"]:
             raise ValueError(
-                f"unknown image_model {image_model!r}; known: {sorted(MODEL_PRESETS)}"
+                f"unknown image_model {image_model!r}; available: {enabled_image_models()}"
             )
         if not isinstance(workspace, VisionWorkspace):
             raise TypeError(
@@ -840,7 +922,7 @@ class ImageGen:
     ) -> str:
         """Rewrite a prompt using the reasoning model. Three modes:
 
-        1. **prompt only** — optimize a text-to-image scene description for gpt-image-2.
+        1. **prompt only** — optimize a text-to-image scene description for the image model.
         2. **prompt + images** — refine an edit prompt using source images as context.
         3. **images + instructions** — generate a prompt from an image + user direction
            (e.g., "produce a prompt that recreates this image precisely").
@@ -879,11 +961,11 @@ class ImageGen:
         else:
             mode_prompt = (
                 f'Rewrite this prompt as a vivid, detailed scene description optimized for '
-                f'gpt-image-2: "{prompt}". Add specifics for composition, lighting, style, and '
-                f"mood that would naturally suit the subject. Return ONLY the rewritten prompt."
+                f'{self.image_model}: "{prompt}". Add specifics for composition, lighting, style, '
+                f"and mood that would naturally suit the subject. Return ONLY the rewritten prompt."
             )
             sys_prompt = (
-                "You optimize text-to-image prompts for gpt-image-2. Produce a single concise "
+                f"You optimize text-to-image prompts for {self.image_model}. Produce a single concise "
                 "but evocative prompt. No preamble, no quotes."
             )
 
@@ -1220,24 +1302,23 @@ class ImageGen:
     def _build_tools(self, **overrides) -> tuple[dict, str]:
         """Build the image-generation tool dict + the image_model that will be used.
 
-        Auto-routes `background='transparent'` to gpt-image-1.5 (the only model that supports it).
+        Auto-routes `background='transparent'` to TRANSPARENT_FALLBACK_MODEL when the selected
+        model can't render transparency (see `resolve_image_model`).
         """
-        effective_model = self.image_model
-        if (
-            overrides.get("background") == "transparent"
-            and not MODEL_PRESETS[effective_model]["supports_transparent"]
-        ):
+        effective_model = resolve_image_model(self.image_model, overrides.get("background"))
+        if effective_model != self.image_model:
             sys.stderr.write(
-                f"[ImageGen] background='transparent' is not supported by {effective_model}; "
-                "switching to gpt-image-1.5 for this call.\n"
+                f"[ImageGen] background='transparent' is not supported by {self.image_model}; "
+                f"switching to {effective_model} for this call.\n"
             )
-            effective_model = "gpt-image-1.5"
 
         preset = MODEL_PRESETS[effective_model]
         tools = {"type": "image_generation", "model": effective_model, **preset["defaults"]}
         tools.update(overrides)
-        if not preset.get("supports_input_fidelity", False):
+        if not preset["supports_input_fidelity"]:
             tools.pop("input_fidelity", None)
+        if not preset["supports_complexity"]:
+            tools.pop("complexity", None)
         return tools, effective_model
 
     def _thumb(self, img_bytes: bytes) -> bytes:

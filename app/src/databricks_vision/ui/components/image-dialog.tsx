@@ -59,6 +59,8 @@ export type ImageDialogImage = {
   brand_conflicts?: string[];
   improved_prompt?: string | null;
   criteria_evaluation?: string | null;
+  // Model that produced the image; null for older rows, "ingested" for imports.
+  image_model?: string | null;
 };
 
 // The four fixed built-in cells. The 5th cell ("Custom") is rendered dynamically from
@@ -218,6 +220,9 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogTitle className="flex items-center gap-2 pr-8">
             <span className="truncate">{displayName}</span>
+            {image.image_model?.startsWith("gpt-image") && (
+              <Badge variant="outline" className="text-xs font-normal shrink-0">{image.image_model}</Badge>
+            )}
           </DialogTitle>
           <div className="grid md:grid-cols-2 gap-4">
             <img

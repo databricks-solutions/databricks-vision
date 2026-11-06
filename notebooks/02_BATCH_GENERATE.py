@@ -37,7 +37,7 @@ dbutils.widgets.text("variations_json", "[]", "Variations JSON")
 dbutils.widgets.text("batch_name", "", "Batch Name")
 dbutils.widgets.text("size", "1024x1024", "Size")
 dbutils.widgets.text("quality", "low", "Quality")
-dbutils.widgets.text("image_model", "gpt-image-2", "Image Model")
+dbutils.widgets.text("image_model", "gpt-image-2.5-flare", "Image Model")
 dbutils.widgets.text("output_format", "png", "Output Format")
 dbutils.widgets.text("background", "opaque", "Background")
 dbutils.widgets.text("catalog", "", "Catalog")
@@ -55,7 +55,7 @@ variations_json = dbutils.widgets.get("variations_json") or "[]"
 batch_name = dbutils.widgets.get("batch_name") or ""
 size = dbutils.widgets.get("size") or "1024x1024"
 quality = dbutils.widgets.get("quality") or "low"
-image_model = dbutils.widgets.get("image_model") or "gpt-image-2"
+image_model = dbutils.widgets.get("image_model") or "gpt-image-2.5-flare"
 output_format = dbutils.widgets.get("output_format") or "png"
 background = dbutils.widgets.get("background") or "opaque"
 catalog = dbutils.widgets.get("catalog")

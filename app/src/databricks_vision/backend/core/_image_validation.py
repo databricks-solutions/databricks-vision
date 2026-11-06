@@ -1,15 +1,59 @@
-"""Image-generation size validation shared by single-gen and batch routes."""
+"""Image-generation request validation shared by single-gen and batch routes.
+
+Every rule is keyed off `image_gen.MODEL_PRESETS` so adding a model there is the only
+change the backend needs.
+"""
 from __future__ import annotations
 
 from fastapi import HTTPException
 
-# Sizes supported by gpt-image-1.5 (used when transparent BG is requested,
-# since the lib auto-routes transparent → gpt-image-1.5).
-_GPT_IMAGE_15_SIZES = {"auto", "1024x1024", "1024x1536", "1536x1024"}
+from image_gen import MODEL_PRESETS, enabled_image_models, resolve_image_model
+
+_COMPLEXITIES = {"low", "medium", "high"}
 
 
-def validate_size(size: str, transparent: bool) -> None:
-    """Validate `size` against gpt-image-2 / gpt-image-1.5 (transparent) constraints.
+def validate_tool_request(
+    image_model: str, background: str, quality: str, size: str, complexity: str = "",
+) -> str:
+    """Validate one request's image-tool params; return the model that will serve it
+    (`image_model`, or the transparent fallback when it can't render transparency).
+    """
+    effective = resolve_image_model(validate_image_model(image_model), background)
+    validate_quality(effective, quality)
+    validate_size(size, effective)
+    validate_complexity(complexity)
+    return effective
+
+
+def validate_image_model(image_model: str) -> str:
+    """Raise HTTPException(400) unless `image_model` is a known, enabled model."""
+    if image_model not in enabled_image_models():
+        raise HTTPException(
+            400,
+            f"Unknown image model {image_model!r}; available: {', '.join(enabled_image_models())}",
+        )
+    return image_model
+
+
+def validate_quality(image_model: str, quality: str) -> None:
+    """`image_model` is the resolved model (after any transparent fallback)."""
+    allowed = MODEL_PRESETS[image_model]["qualities"]
+    if quality not in allowed:
+        raise HTTPException(
+            400,
+            f"Quality {quality!r} is not supported by {image_model} (allowed: {', '.join(allowed)})",
+        )
+
+
+def validate_complexity(complexity: str) -> None:
+    if complexity and complexity not in _COMPLEXITIES:
+        raise HTTPException(
+            400, f"Invalid complexity {complexity!r}; expected one of low, medium, high"
+        )
+
+
+def validate_size(size: str, image_model: str) -> None:
+    """Validate `size` against the resolved model's constraints.
     Raises HTTPException(400) on invalid input.
 
     Mirrors the client-side validation in routes/generate.tsx so a malformed
@@ -18,12 +62,13 @@ def validate_size(size: str, transparent: bool) -> None:
     if size == "auto":
         return
 
-    if transparent:
-        if size not in _GPT_IMAGE_15_SIZES:
+    fixed_sizes = MODEL_PRESETS[image_model]["sizes"]
+    if fixed_sizes is not None:
+        if size not in fixed_sizes:
             raise HTTPException(
                 400,
-                f"Transparent BG uses gpt-image-1.5 — size {size!r} is not supported "
-                "(allowed: 1024x1024, 1024x1536, 1536x1024, auto)",
+                f"{image_model} does not support size {size!r} "
+                f"(allowed: {', '.join(fixed_sizes)})",
             )
         return
 
