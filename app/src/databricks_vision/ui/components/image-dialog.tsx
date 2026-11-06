@@ -1,6 +1,6 @@
 /**
  * ImageDialog — unified image detail dialog.
- * Shows image, metadata, and actions: Delete, Edit, Download.
+ * Shows image, metadata, and actions: Delete, Edit, Compose, Adapt, Download.
  */
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -15,7 +15,7 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Copy, Download, Edit3, Search, Sparkles, Trash2 } from "lucide-react";
+import { Copy, Crop, Download, Edit3, Layers, Search, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 // The built-in numeric metric dimensions (purpose_fit is merged into prompt_adherence and no
@@ -208,10 +208,40 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
     }
   }
 
+  // Hand the image to the Generate page's Compose mode as its first product.
+  async function handleUseInCompose() {
+    if (!image) return;
+    try {
+      const res = await fetch(imageSrc(image));
+      if (!res.ok) throw new Error("Failed to fetch image");
+      const blob = await res.blob();
+      const ext = image.volume_path?.match(/\.\w+$/)?.[0] ?? ".png";
+      sessionStorage.setItem("compose-product-blob-url", URL.createObjectURL(blob));
+      sessionStorage.setItem("compose-product-filename", `${image.image_name ?? "product"}${ext}`);
+      navigate({ to: "/generate" });
+      onClose();
+    } catch (e) {
+      toast.error(`Failed to load image for Compose: ${e}`);
+    }
+  }
+
+  // Open the Generate page's Adapt-to-formats dialog for this saved image (read server-side).
+  function handleAdapt() {
+    if (!image) return;
+    sessionStorage.setItem("adapt-source-batch-id", image.batch_id);
+    sessionStorage.setItem("adapt-source-image-id", String(image.id));
+    if (image.folder) sessionStorage.setItem("adapt-source-folder", image.folder);
+    else sessionStorage.removeItem("adapt-source-folder");
+    navigate({ to: "/generate" });
+    onClose();
+  }
+
   if (!image) return null;
 
   const displayName = image.variation_label || image.image_name?.replace(/_/g, " ") || "Image";
   const src = imageSrc(image);
+  // Vector (SVG) rows skip the raster pipeline: no edit / analyze / compose / adapt.
+  const isVector = image.volume_path?.toLowerCase().endsWith(".svg") ?? false;
 
   return (
     <>
@@ -367,25 +397,37 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
             <Button variant="destructive" size="sm" className="text-white" onClick={() => setShowDelete(true)}>
               <Trash2 className="h-4 w-4 mr-1" />Delete
             </Button>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAnalyze}
-                disabled={analyzing}
-                title={image.metrics ? "Re-run analyzer + embedder" : "Run analyzer + embedder for this image"}
-              >
-                <Sparkles className="h-4 w-4 mr-1" />
-                {analyzing ? "Analyzing…" : image.metrics ? "Re-analyze" : "Analyze"}
-              </Button>
-              {onFindSimilar && (
+            <div className="flex flex-wrap gap-2">
+              {!isVector && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAnalyze}
+                  disabled={analyzing}
+                  title={image.metrics ? "Re-run analyzer + embedder" : "Run analyzer + embedder for this image"}
+                >
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  {analyzing ? "Analyzing…" : image.metrics ? "Re-analyze" : "Analyze"}
+                </Button>
+              )}
+              {onFindSimilar && !isVector && (
                 <Button variant="outline" size="sm" onClick={() => onFindSimilar(image)}>
                   <Search className="h-4 w-4 mr-1" />Find similar
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={handleEdit}>
-                <Edit3 className="h-4 w-4 mr-1" />Edit
-              </Button>
+              {!isVector && (
+                <>
+                  <Button variant="outline" size="sm" onClick={handleEdit}>
+                    <Edit3 className="h-4 w-4 mr-1" />Edit
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleUseInCompose} title="Use as the product in Compose">
+                    <Layers className="h-4 w-4 mr-1" />Compose
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleAdapt} title="Re-lay out for other marketing formats">
+                    <Crop className="h-4 w-4 mr-1" />Adapt
+                  </Button>
+                </>
+              )}
               <Button variant="outline" size="sm" asChild>
                 <a href={imageSrc(image)} download={image.image_name ?? "image"}>
                   <Download className="h-4 w-4 mr-1" />Download

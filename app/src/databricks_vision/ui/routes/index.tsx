@@ -5,6 +5,7 @@ import { BatchDetailContent } from "@/components/batch-detail";
 import { ImageDialog, type ImageDialogImage } from "@/components/image-dialog";
 import type { SearchMode } from "@/components/apx/navbar";
 import { useListGalleryImages, useListFolders, useCreateFolder, useDeleteFolder, useListBatches, listFoldersKey } from "@/lib/api";
+import { SINGLE_IMAGE_MODES } from "@/lib/image-models";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,7 +95,7 @@ function GalleryPage() {
   const folders = foldersData?.data ?? [];
 
   const { data: batchesData } = useListBatches();
-  const completedBatches = (batchesData?.data ?? []).filter((b: any) => b.status === "completed" && b.batch_mode !== "single" && b.batch_mode !== "edit");
+  const completedBatches = (batchesData?.data ?? []).filter((b: any) => b.status === "completed" && !SINGLE_IMAGE_MODES.has(b.batch_mode));
 
   // Only show single/edit images in gallery (not batch images).
   // refetchOnMount/Focus so navigating here (or returning to the tab) after

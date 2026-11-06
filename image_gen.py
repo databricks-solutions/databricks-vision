@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -44,11 +45,27 @@ _BASE_QUALITIES = ("auto", "low", "medium", "high")
 _EXTENDED_QUALITIES = (*_BASE_QUALITIES, "xhigh", "max")
 _GPT_IMAGE_15_SIZES = ("auto", "1024x1024", "1024x1536", "1536x1024")
 
+# Input images per edit / compose call (probed: 10 accepted and all used; 8 leaves headroom).
+MAX_INPUT_IMAGES = 8
+
+# Marketing formats for Compose / Adapt. Every size is valid for the flexible-size models
+# (multiples of 16, ratio ≤ 3:1, 655,360–8,294,400 pixels).
+FORMAT_PRESETS = {
+    "square": {"label": "Square post", "ratio": "1:1", "size": "1024x1024"},
+    "portrait": {"label": "Portrait post", "ratio": "4:5", "size": "1024x1280"},
+    "story": {"label": "Story / Reel", "ratio": "9:16", "size": "1152x2048"},
+    "landscape": {"label": "Landscape", "ratio": "16:9", "size": "2048x1152"},
+    "banner": {"label": "Web banner", "ratio": "3:1", "size": "2304x768"},
+    "poster": {"label": "Poster", "ratio": "A-series", "size": "1456x2048"},
+}
+
 # Single source of truth for which image models the lib + app offer and what each supports.
 # `sizes=None` means "flexible": any WxH with multiples of 16, max edge 3840px, ratio ≤ 3:1,
 # and 655,360–8,294,400 total pixels (popular: 1024x1024, 1536x1024, 1024x1536, 2048x2048,
-# 2048x1152, 3840x2160, 2160x3840). `enabled=False` keeps a model out of every picker and
-# makes ImageGen reject it — flip it once the workspace's Responses API serves the model.
+# 2048x1152, 3840x2160, 2160x3840). `supports_svg` means the image_generation tool accepts
+# output_format='svg' (non-streamed; see ImageGen.generate_svg). `enabled=False` keeps a model
+# out of every picker and makes ImageGen reject it — flip it once the workspace's Responses
+# API serves the model.
 MODEL_PRESETS = {
     "gpt-image-2.5-flare": {
         "label": "GPT Image 2.5 Flare",
@@ -59,6 +76,7 @@ MODEL_PRESETS = {
         "supports_transparent": True,
         "supports_input_fidelity": False,
         "supports_complexity": False,
+        "supports_svg": False,
         "enabled": True,
     },
     "gpt-image-2.5-sunburst": {
@@ -70,6 +88,7 @@ MODEL_PRESETS = {
         "supports_transparent": True,
         "supports_input_fidelity": False,
         "supports_complexity": False,
+        "supports_svg": False,
         "enabled": True,
     },
     "gpt-image-2.6-flare": {
@@ -81,6 +100,7 @@ MODEL_PRESETS = {
         "supports_transparent": True,
         "supports_input_fidelity": False,
         "supports_complexity": True,
+        "supports_svg": True,
         "enabled": True,
     },
     "gpt-image-2.6-sunburst": {
@@ -92,6 +112,7 @@ MODEL_PRESETS = {
         "supports_transparent": True,
         "supports_input_fidelity": False,
         "supports_complexity": True,
+        "supports_svg": True,
         "enabled": True,
     },
     "gpt-image-2": {
@@ -103,6 +124,7 @@ MODEL_PRESETS = {
         "supports_transparent": False,
         "supports_input_fidelity": False,
         "supports_complexity": False,
+        "supports_svg": False,
         "enabled": True,
     },
     "gpt-image-1.5": {
@@ -114,6 +136,7 @@ MODEL_PRESETS = {
         "supports_transparent": True,
         "supports_input_fidelity": True,
         "supports_complexity": False,
+        "supports_svg": False,
         "enabled": True,
     },
 }
@@ -133,6 +156,22 @@ def resolve_image_model(image_model: str, background: str | None = None) -> str:
     if background == "transparent" and not MODEL_PRESETS[image_model]["supports_transparent"]:
         return TRANSPARENT_FALLBACK_MODEL
     return image_model
+
+
+_UNSAFE_SVG = re.compile(
+    r"<script|<foreignObject|\son\w+\s*=|(?:href|src)\s*=\s*[\"']\s*(?:https?:|javascript:|data:text)",
+    re.IGNORECASE,
+)
+
+
+def check_static_svg(svg: str) -> None:
+    """Raise ValueError unless *svg* is SVG markup with no scripts, event handlers or external
+    references. The image model only emits static vector content; this guards the gallery,
+    which serves the markup back to browsers."""
+    if "<svg" not in svg[:2000].lower():
+        raise ValueError("model output is not SVG markup")
+    if _UNSAFE_SVG.search(svg):
+        raise ValueError("SVG contains scripts, event handlers or external references")
 
 _SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -221,6 +260,13 @@ CREATE TABLE IF NOT EXISTS style_guidelines (
 -- At most one row may carry is_default=TRUE (partial unique index).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_style_guidelines_one_default
     ON style_guidelines (is_default) WHERE is_default;
+
+-- Brand-kit assets (UI: "Brand kits"). logo_path is a UC Volume file with alpha preserved;
+-- palette is a JSON list of hex colours. Compose attaches the logo and quotes the palette and
+-- typography in its prompt; body stays the judges' criteria.
+ALTER TABLE style_guidelines ADD COLUMN IF NOT EXISTS logo_path TEXT DEFAULT '';
+ALTER TABLE style_guidelines ADD COLUMN IF NOT EXISTS palette JSONB DEFAULT '[]';
+ALTER TABLE style_guidelines ADD COLUMN IF NOT EXISTS typography TEXT DEFAULT '';
 
 -- eval_criteria: the fixed set of 5 evaluation criteria shown as the image-eval metric grid.
 -- Four built-ins (quality/prompt/text/safe) have editable instructions; `custom` is fully
@@ -852,7 +898,8 @@ class ImageGen:
         display_progress: bool = True,
         **tool_overrides,
     ) -> list[GeneratedImage]:
-        """Edit existing images. *images* is a path, raw bytes, or a list of either (up to 4)."""
+        """Edit existing images. *images* is a path, raw bytes, or a list of either
+        (up to MAX_INPUT_IMAGES)."""
         return await self._consume_stream(
             self.stream_edit(
                 prompt,
@@ -880,9 +927,14 @@ class ImageGen:
         batch_name: str = "",
         folder: str = "default",
         persist: bool = True,
+        labels: list[str] | None = None,
         **tool_overrides,
     ) -> AsyncIterator[GenerateEvent]:
         """Streaming form of `edit`. *images* may be paths or raw bytes (or a mix).
+
+        *labels* (one per image) tags each image with its role, e.g.
+        "Image 2 — LOGO: place unaltered"; the label is sent as text right before its image
+        so multi-image compositions don't depend on position alone.
 
         See `stream_generate` for the `persist` flag semantics.
         """
@@ -890,11 +942,16 @@ class ImageGen:
 
         if isinstance(images, (str, bytes)):
             images = [images]
+        if len(images) > MAX_INPUT_IMAGES:
+            raise ValueError(f"at most {MAX_INPUT_IMAGES} input images; got {len(images)}")
+        if labels is not None and len(labels) != len(images):
+            raise ValueError(f"got {len(labels)} labels for {len(images)} images")
 
         content: list[dict] = [{"type": "input_text", "text": prompt}]
-        for src in images[:4]:
-            b64 = self._compress_for_upload(src)
-            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"})
+        for i, src in enumerate(images):
+            if labels is not None:
+                content.append({"type": "input_text", "text": labels[i]})
+            content.append({"type": "input_image", "image_url": self._to_data_url(src)})
 
         api_input = [{"role": "user", "content": content}]
 
@@ -970,9 +1027,8 @@ class ImageGen:
             )
 
         content: list[dict] = [{"type": "input_text", "text": mode_prompt}]
-        for path in images[:4]:
-            b64 = self._compress_for_upload(path)
-            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"})
+        for path in images[:MAX_INPUT_IMAGES]:
+            content.append({"type": "input_image", "image_url": self._to_data_url(path)})
 
         response = await self.client.responses.create(
             model=self.reasoning_model,
@@ -982,6 +1038,27 @@ class ImageGen:
             ],
         )
         return response.output_text.strip().strip('"').strip("'")
+
+    async def generate_svg(self, prompt: str, **tool_overrides) -> str:
+        """Generate one vector image from *prompt* and return the SVG markup.
+
+        SVG output can't stream (and responses are only a few KB), so this is a single
+        non-streamed call. Raises ValueError if the image model has no SVG support or the
+        markup isn't a static SVG (see `check_static_svg`).
+        """
+        tools, image_model = self._build_tools(output_format="svg", **tool_overrides)
+        if not MODEL_PRESETS[image_model]["supports_svg"]:
+            raise ValueError(f"{image_model} does not support SVG output")
+        tools.pop("partial_images", None)
+        response = await self.client.responses.create(
+            model=self.reasoning_model, input=prompt, tools=[tools],
+        )
+        for item in response.output:
+            if item.type == "image_generation_call" and item.result:
+                svg = base64.b64decode(item.result).decode("utf-8")
+                check_static_svg(svg)
+                return svg
+        raise RuntimeError("the model returned no SVG")
 
     async def _persist(
         self,
@@ -1409,15 +1486,24 @@ class ImageGen:
         )
 
     @staticmethod
-    def _compress_for_upload(src: str | bytes, max_side: int = 2048, quality: int = 95) -> str:
-        """Compress a path-or-bytes image to a base64 JPEG (max_side bound) for inline upload."""
+    def _to_data_url(src: str | bytes, max_side: int = 2048, quality: int = 95) -> str:
+        """Compress a path-or-bytes image (max_side bound) to a data URL for inline upload.
+
+        Images with transparency (e.g. logos) stay PNG so the model sees the alpha channel
+        instead of a flattened matte; everything else becomes JPEG.
+        """
         img = PILImage.open(BytesIO(src) if isinstance(src, bytes) else src)
         if max(img.size) > max_side:
             ratio = max_side / max(img.size)
             img = img.resize((int(img.width * ratio), int(img.height * ratio)))
         buf = BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=quality)
-        return base64.b64encode(buf.getvalue()).decode()
+        if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+            img.convert("RGBA").save(buf, format="PNG")
+            mime = "image/png"
+        else:
+            img.convert("RGB").save(buf, format="JPEG", quality=quality)
+            mime = "image/jpeg"
+        return f"data:{mime};base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
 # ---------------------------------------------------------------------------

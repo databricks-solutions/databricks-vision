@@ -147,13 +147,17 @@ class FolderCreate(BaseModel):
     name: str
 
 
-# --- Style guidelines (named analyzer criteria) ---
+# --- Style guidelines / brand kits (named analyzer criteria + brand assets) ---
 
 class StyleGuidelineOut(BaseModel):
     id: int
     name: str
     body: str
     is_default: bool
+    # Brand-kit assets: logo is a UC Volume path ("" = none), palette is hex colours.
+    logo_path: str = ""
+    palette: list[str] = []
+    typography: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -162,12 +166,16 @@ class StyleGuidelineCreate(BaseModel):
     name: str
     body: str = ""
     is_default: bool = False
+    palette: list[str] = []
+    typography: str = ""
 
 
 class StyleGuidelineUpdate(BaseModel):
     name: str | None = None
     body: str | None = None
     is_default: bool | None = None
+    palette: list[str] | None = None
+    typography: str | None = None
 
 
 # --- Eval criteria (the fixed 5-cell image-eval metric grid) ---
@@ -196,6 +204,15 @@ class ImageModelOut(BaseModel):
     sizes: list[str] | None = None  # None = flexible WxH (see _image_validation.validate_size)
     supports_transparent: bool
     supports_complexity: bool
+    supports_svg: bool
+
+
+class FormatPresetOut(BaseModel):
+    """A marketing format for Compose / Adapt (image_gen.FORMAT_PRESETS)."""
+    key: str
+    label: str
+    ratio: str
+    size: str
 
 
 class SettingsOut(BaseModel):

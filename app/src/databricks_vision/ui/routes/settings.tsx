@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import Navbar from "@/components/apx/navbar";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ import {
   type SettingsUpdate,
   type EvalCriterionOut,
 } from "@/lib/api";
-import { IMAGE_MODEL_STORAGE_KEY } from "@/lib/image-models";
+import { CHECKERBOARD_STYLE, IMAGE_MODEL_STORAGE_KEY } from "@/lib/image-models";
 import { Save, Sparkles, Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
@@ -59,11 +59,11 @@ function SettingsPage() {
       <main className="flex-1 px-4 sm:px-6 py-6 max-w-4xl w-full mx-auto">
         <h1 className="text-2xl font-semibold mb-1">Settings</h1>
         <p className="text-sm text-muted-foreground mb-6">
-          Manage style guidelines used by the analyzer and configure default generation models.
+          Manage brand kits used by Compose and the analyzer, and configure default generation models.
         </p>
         <Tabs defaultValue="guidelines" className="w-full">
           <TabsList>
-            <TabsTrigger value="guidelines">Style Guidelines</TabsTrigger>
+            <TabsTrigger value="guidelines">Brand Kits</TabsTrigger>
             <TabsTrigger value="eval">Eval Criteria</TabsTrigger>
             <TabsTrigger value="models">Model Settings</TabsTrigger>
           </TabsList>
@@ -190,8 +190,65 @@ function EvalCriteriaTab() {
 }
 
 // ──────────────────────────────────────────────────────────
-// Style Guidelines tab
+// Brand Kits tab (stored as style guidelines: rules + logo, palette, typography)
 // ──────────────────────────────────────────────────────────
+
+function BrandLogo({ kit, onChanged }: { kit: StyleGuidelineOut; onChanged: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function send(method: "POST" | "DELETE", file?: File) {
+    setBusy(true);
+    try {
+      const body = file ? new FormData() : undefined;
+      if (file) body!.set("logo", file);
+      const res = await fetch(`/api/style-guidelines/${kit.id}/logo`, { method, body });
+      if (!res.ok) throw new Error(await res.text());
+      toast.success(file ? "Logo uploaded" : "Logo removed");
+      onChanged();
+    } catch (e) {
+      toast.error(`Logo update failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {kit.logo_path ? (
+        <img
+          src={`/api/style-guidelines/${kit.id}/logo?v=${encodeURIComponent(kit.updated_at ?? "")}`}
+          alt={`${kit.name} logo`}
+          className="h-10 w-16 object-contain rounded border"
+          style={CHECKERBOARD_STYLE}
+        />
+      ) : (
+        <div className="h-10 w-16 rounded border border-dashed text-[10px] text-muted-foreground flex items-center justify-center">
+          No logo
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) send("POST", file);
+          e.target.value = "";
+        }}
+      />
+      <Button variant="outline" size="sm" className="h-7 text-xs" disabled={busy} onClick={() => inputRef.current?.click()}>
+        {kit.logo_path ? "Replace" : "Upload logo"}
+      </Button>
+      {kit.logo_path && (
+        <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={busy} onClick={() => send("DELETE")}>
+          Remove
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function StyleGuidelinesTab() {
   const queryClient = useQueryClient();
@@ -225,8 +282,9 @@ function StyleGuidelinesTab() {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Saved guidelines appear in the Style guideline dropdown on the Generate form. Mark one as
-          default to pre-select it for new generations.
+          A brand kit's logo, colours and typography are applied by Compose; its rules are what the
+          judges score every image against. Kits appear in the Style guideline dropdown on the
+          Generate form — mark one as default to pre-select it.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4 mr-1" />New
@@ -257,6 +315,24 @@ function StyleGuidelinesTab() {
                 <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-line">
                   {g.body || <span className="italic">No body</span>}
                 </p>
+                {((g.palette ?? []).length > 0 || g.typography) && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    {(g.palette ?? []).map((colour) => (
+                      <span
+                        key={colour}
+                        title={colour}
+                        className="h-4 w-4 rounded-full border"
+                        style={{ backgroundColor: colour }}
+                      />
+                    ))}
+                    {g.typography && (
+                      <span className="text-[11px] text-muted-foreground truncate ml-1">{g.typography}</span>
+                    )}
+                  </div>
+                )}
+                <div className="mt-2">
+                  <BrandLogo kit={g} onChanged={invalidate} />
+                </div>
               </div>
               <div className="flex gap-1 shrink-0">
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(g)}>
@@ -275,8 +351,8 @@ function StyleGuidelinesTab() {
       <GuidelineDialog
         open={creating}
         onOpenChange={(o) => !o && setCreating(false)}
-        title="New style guideline"
-        initial={{ name: "", body: "", is_default: guidelines.length === 0 }}
+        title="New brand kit"
+        initial={{ ...EMPTY_GUIDELINE, is_default: guidelines.length === 0 }}
         onSubmit={async (form) => {
           await createMutation.mutateAsync(form);
           toast.success(`Created "${form.name}"`);
@@ -290,10 +366,16 @@ function StyleGuidelinesTab() {
       <GuidelineDialog
         open={editing !== null}
         onOpenChange={(o) => !o && setEditing(null)}
-        title="Edit style guideline"
+        title="Edit brand kit"
         initial={
           editing
-            ? { name: editing.name, body: editing.body, is_default: editing.is_default }
+            ? {
+                name: editing.name,
+                body: editing.body,
+                is_default: editing.is_default,
+                palette: editing.palette ?? [],
+                typography: editing.typography ?? "",
+              }
             : null
         }
         onSubmit={async (form) => {
@@ -334,6 +416,15 @@ interface GuidelineForm {
   name: string;
   body: string;
   is_default: boolean;
+  palette: string[];
+  typography: string;
+}
+
+const EMPTY_GUIDELINE: GuidelineForm = { name: "", body: "", is_default: false, palette: [], typography: "" };
+
+// Comma/space separated hex colours → unique list (the backend validates and upper-cases).
+function parsePalette(text: string): string[] {
+  return Array.from(new Set(text.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean)));
 }
 
 function GuidelineDialog({
@@ -351,10 +442,14 @@ function GuidelineDialog({
   onSubmit: (form: GuidelineForm) => Promise<void>;
   submitting: boolean;
 }) {
-  const [form, setForm] = useState<GuidelineForm>({ name: "", body: "", is_default: false });
+  const [form, setForm] = useState<GuidelineForm>(EMPTY_GUIDELINE);
+  const [paletteText, setPaletteText] = useState("");
 
   useEffect(() => {
-    if (initial) setForm(initial);
+    if (initial) {
+      setForm(initial);
+      setPaletteText(initial.palette.join(", "));
+    }
   }, [initial]);
 
   async function handleSubmit() {
@@ -363,7 +458,7 @@ function GuidelineDialog({
       return;
     }
     try {
-      await onSubmit({ ...form, name: form.name.trim() });
+      await onSubmit({ ...form, name: form.name.trim(), palette: parsePalette(paletteText) });
     } catch (e) {
       toast.error(`Failed: ${e}`);
     }
@@ -394,6 +489,35 @@ function GuidelineDialog({
               className="resize-y text-xs font-mono"
             />
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="g-palette">Brand colours</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="g-palette"
+                value={paletteText}
+                onChange={(e) => setPaletteText(e.target.value)}
+                placeholder="#FF3621, #1B3139"
+                className="font-mono text-xs"
+              />
+              <div className="flex gap-1 shrink-0">
+                {parsePalette(paletteText).map((colour) => (
+                  <span key={colour} className="h-5 w-5 rounded-full border" style={{ backgroundColor: colour }} />
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="g-typography">Typography</Label>
+            <Input
+              id="g-typography"
+              value={form.typography}
+              onChange={(e) => setForm((f) => ({ ...f, typography: e.target.value }))}
+              placeholder="e.g. Bold geometric sans-serif headlines, light body text"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Add the logo from the brand kit list after saving.
+          </p>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input
               type="checkbox"
