@@ -23,6 +23,7 @@ import {
   useCreateBatch,
   useGetSettings,
   useListFolders,
+  useListFormatPresets,
   useListImageModels,
   useListStyleGuidelines,
   listBatchesKey,
@@ -31,11 +32,18 @@ import type { ImageModelOut } from "@/lib/api";
 import {
   DEFAULT_QUALITIES,
   IMAGE_MODEL_STORAGE_KEY,
-  QUALITY_LABELS,
   resolveImageModel,
 } from "@/lib/image-models";
 import VolumeBrowserDialog from "@/components/apx/volume-browser-dialog";
-import { Sparkles, X, Upload, ImagePlus, StopCircle, FolderOpen, Plus } from "lucide-react";
+import { AdaptDialog, type AdaptSource } from "@/components/adapt-dialog";
+import { ComposeForm } from "@/components/compose-form";
+import {
+  COMPLEXITY_DEFAULT,
+  ComplexitySelect,
+  ModelSelect,
+  QualitySelect,
+} from "@/components/model-controls";
+import { Sparkles, X, Upload, ImagePlus, StopCircle, FolderOpen, Plus, Crop, Download } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/generate")({
@@ -47,7 +55,12 @@ type GeneratedImage = {
   b64: string;
   done: boolean;
   partialCount: number;
+  mime?: string; // defaults to image/png; SVG results are image/svg+xml
+  label?: string; // e.g. the target format for Adapt results
 };
+
+const SVG_FORMAT = "svg";
+const FORMAT_LABELS: Record<string, string> = { png: "PNG", jpeg: "JPEG", webp: "WebP", [SVG_FORMAT]: "SVG (vector)" };
 
 type VariationRow = { label: string; prompt: string; edited: boolean };
 
@@ -92,7 +105,6 @@ const FLEXIBLE_SIZE_PRESETS: SizePreset[] = [
 ];
 
 const SIZE_CUSTOM_SENTINEL = "__custom__";
-const COMPLEXITY_DEFAULT = "default"; // Radix Select items can't use "" as a value
 
 function parseSize(s: string): [number, number] | null {
   const m = s.match(/^(\d+)x(\d+)$/);
@@ -130,54 +142,6 @@ function constrainToModel(model: ImageModelOut | undefined, quality: string, siz
     quality: qualities.includes(quality) ? quality : "auto",
     size: model?.sizes ? snapToFixedSize(size, model.sizes) : size,
   };
-}
-
-function ModelSelect({
-  models,
-  value,
-  onChange,
-}: {
-  models: ImageModelOut[];
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const selected = models.find((m) => m.id === value);
-  return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-8 text-xs">
-        {/* Label rendered directly — the model list loads async (see the style-guideline select). */}
-        <span>{selected?.label ?? (value || "Loading…")}</span>
-      </SelectTrigger>
-      <SelectContent>
-        {models.map((m) => (
-          <SelectItem key={m.id} value={m.id} className="text-xs">
-            {m.label} <span className="text-muted-foreground">· {m.description}</span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function QualitySelect({
-  qualities,
-  value,
-  onChange,
-}: {
-  qualities: string[];
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-8 text-xs"><span>{QUALITY_LABELS[value] ?? value}</span></SelectTrigger>
-      <SelectContent>
-        {qualities.map((q) => (
-          <SelectItem key={q} value={q}>{QUALITY_LABELS[q] ?? q}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
 }
 
 function SizeSelectAdvanced({
@@ -334,7 +298,7 @@ function SizeSelectAdvanced({
 
 function GeneratePage() {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"single" | "edit" | "batch">("single");
+  const [mode, setMode] = useState<"single" | "edit" | "compose" | "batch">("single");
 
   // Folders
   const { data: foldersData } = useListFolders();
@@ -356,6 +320,8 @@ function GeneratePage() {
     ? imageModelPick
     : settingsData?.data.image_model ?? "";
   const selectedModel = imageModels.find((m) => m.id === imageModelId);
+  const { data: formatsData } = useListFormatPresets();
+  const formatPresets = formatsData?.data ?? [];
 
   // Pick up pre-loaded image from ImageDialog "Edit" button
   useEffect(() => {
@@ -404,6 +370,42 @@ function GeneratePage() {
     }
   }, []);
 
+  // Pick up hand-offs from the ImageDialog "Use in Compose" / "Adapt" buttons.
+  const [composeProduct, setComposeProduct] = useState<File | null>(null);
+  const [adaptSource, setAdaptSource] = useState<AdaptSource | null>(null);
+  const [adaptOpen, setAdaptOpen] = useState(false);
+  useEffect(() => {
+    const productUrl = sessionStorage.getItem("compose-product-blob-url");
+    const productName = sessionStorage.getItem("compose-product-filename");
+    const adaptBatchId = sessionStorage.getItem("adapt-source-batch-id");
+    const adaptImageId = sessionStorage.getItem("adapt-source-image-id");
+    const adaptFolder = sessionStorage.getItem("adapt-source-folder");
+    for (const key of ["compose-product-blob-url", "compose-product-filename", "adapt-source-batch-id",
+      "adapt-source-image-id", "adapt-source-folder"]) {
+      sessionStorage.removeItem(key);
+    }
+    if (productUrl) {
+      fetch(productUrl)
+        .then((r) => r.blob())
+        .then((b) => {
+          setMode("compose");
+          setComposeProduct(new File([b], productName ?? "product.png", { type: b.type || "image/png" }));
+        })
+        .catch(() => {});
+    }
+    if (adaptBatchId && adaptImageId) {
+      setMode("compose");
+      setAdaptSource({
+        kind: "gallery",
+        batchId: adaptBatchId,
+        imageId: Number(adaptImageId),
+        previewUrl: `/api/gallery/${adaptBatchId}/${adaptImageId}/thumbnail`,
+        folder: adaptFolder,
+      });
+      setAdaptOpen(true);
+    }
+  }, []);
+
   // --- Source context (when editing an existing image) ---
   const [sourceBatchId, setSourceBatchId] = useState<string | null>(null);
   const [sourceImageId, setSourceImageId] = useState<number | null>(null);
@@ -421,6 +423,7 @@ function GeneratePage() {
   const [complexity, setComplexity] = useState(COMPLEXITY_DEFAULT);
   // The model that will serve single/edit requests (transparent may fall back to gpt-image-1.5).
   const singleModel = resolveImageModel(imageModels, selectedModel, transparent);
+  const isSvg = mode === "single" && outputFormat === SVG_FORMAT;
 
   const handleTransparentToggle = useCallback((checked: boolean) => {
     setTransparent(checked);
@@ -448,6 +451,7 @@ function GeneratePage() {
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [generating, setGenerating] = useState(false);
+  const [expectedCount, setExpectedCount] = useState(1); // skeleton cards while a run starts
   const [analyzingImages, setAnalyzingImages] = useState(false);
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const stopRef = useRef<(() => void) | null>(null);
@@ -489,7 +493,8 @@ function GeneratePage() {
     const batch = constrainToModel(resolveImageModel(imageModels, model, batchTransparent), batchQuality, batchSize);
     setBatchQuality(batch.quality);
     setBatchSize(batch.size);
-  }, [imageModels, transparent, quality, size, batchTransparent, batchQuality, batchSize]);
+    if (outputFormat === SVG_FORMAT && !model?.supports_svg) setOutputFormat("png");
+  }, [imageModels, transparent, quality, size, batchTransparent, batchQuality, batchSize, outputFormat]);
 
   const [variations, setVariations] = useState<VariationRow[]>([
     { label: "", prompt: "", edited: false },
@@ -573,13 +578,85 @@ function GeneratePage() {
     [imageModelId],
   );
 
+  // Stream an SSE generation endpoint into the results panel. `labels` (by event index)
+  // caption each result card, e.g. the target format for Adapt.
+  const runStream = useCallback((url: string, formData: FormData, expected: number, labels?: string[]) => {
+    setGenerating(true);
+    setExpectedCount(expected);
+    setImages([]);
+    const label = (index: number) => labels?.[index];
+    const cleanup = streamSSE(url, formData, {
+      onPartial: (index, b64) => {
+        setImages((prev) => {
+          const idx = prev.findIndex((img) => img.index === index);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], b64, done: false, partialCount: prev[idx].partialCount + 1 };
+            return next;
+          }
+          return [...prev, { index, b64, done: false, partialCount: 1, label: label(index) }];
+        });
+      },
+      onDone: (index, b64) => {
+        setImages((prev) => {
+          const idx = prev.findIndex((img) => img.index === index);
+          if (idx >= 0) { const next = [...prev]; next[idx] = { ...prev[idx], b64, done: true }; return next; }
+          return [...prev, { index, b64, done: true, partialCount: 3, label: label(index) }];
+        });
+      },
+      onComplete: (count) => {
+        toast.success(`${count} image${count !== 1 ? "s" : ""} generated and saved`);
+        // Signal the gallery to keep polling for up to ~90s so it picks up
+        // both phases of the backend save (Phase 1: INSERT image row,
+        // Phase 2: UPDATE with eval fields after analyzer finishes).
+        sessionStorage.setItem("gallery-poll-until", String(Date.now() + 90_000));
+        // Show "running analysis" pill on the Generate page while the
+        // backend's Phase 2 analyzer call runs. Auto-dismiss after 25s
+        // (covers the 95th-percentile analyze latency).
+        setAnalyzingImages(true);
+        setTimeout(() => setAnalyzingImages(false), 25_000);
+        // Kick an immediate invalidate so the row appears asap.
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
+          queryClient.invalidateQueries({ queryKey: listBatchesKey() });
+        }, 3000);
+      },
+      onError: (_index, error) => toast.error(`Generation failed: ${error}`),
+    }, () => setGenerating(false));
+    stopRef.current = cleanup;
+  }, [queryClient]);
+
+  // Vector output can't stream: one request, then show the SVG as a single result.
+  const runSvg = useCallback(async () => {
+    setGenerating(true);
+    setExpectedCount(1);
+    setImages([]);
+    const formData = new FormData();
+    formData.set("prompt", prompt.trim());
+    formData.set("folder", folder);
+    formData.set("quality", quality);
+    if (imageModelId) formData.set("image_model", imageModelId);
+    try {
+      const res = await fetch("/api/generate-svg", { method: "POST", body: formData });
+      if (!res.ok) throw new Error(await res.text());
+      const { svg } = (await res.json()) as { svg: string };
+      const b64 = btoa(Array.from(new TextEncoder().encode(svg), (b) => String.fromCharCode(b)).join(""));
+      setImages([{ index: 0, b64, done: true, partialCount: 3, mime: "image/svg+xml", label: "Vector (SVG)" }]);
+      toast.success("Vector graphic generated and saved");
+      queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
+    } catch (err) {
+      toast.error(`Vector generation failed: ${err}`);
+    } finally {
+      setGenerating(false);
+    }
+  }, [prompt, folder, quality, imageModelId, queryClient]);
+
   const handleSingleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) { toast.error("Please enter a prompt"); return; }
     if (mode === "edit" && uploadedImages.length === 0) { toast.error("Please upload at least one image"); return; }
+    if (mode === "single" && outputFormat === SVG_FORMAT) { runSvg(); return; }
 
-    setGenerating(true);
-    setImages([]);
     const formData = new FormData();
     formData.set("prompt", prompt.trim());
     formData.set("n", String(n));
@@ -612,46 +689,40 @@ function GeneratePage() {
       }
     }
 
-    const cleanup = streamSSE(url, formData, {
-      onPartial: (index, b64) => {
-        setImages((prev) => {
-          const idx = prev.findIndex((img) => img.index === index);
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = { index, b64, done: false, partialCount: prev[idx].partialCount + 1 };
-            return next;
-          }
-          return [...prev, { index, b64, done: false, partialCount: 1 }];
-        });
-      },
-      onDone: (index, b64) => {
-        setImages((prev) => {
-          const idx = prev.findIndex((img) => img.index === index);
-          if (idx >= 0) { const next = [...prev]; next[idx] = { ...prev[idx], b64, done: true }; return next; }
-          return [...prev, { index, b64, done: true, partialCount: 3 }];
-        });
-      },
-      onComplete: (count) => {
-        toast.success(`${count} image${count !== 1 ? "s" : ""} generated and saved`);
-        // Signal the gallery to keep polling for up to ~90s so it picks up
-        // both phases of the backend save (Phase 1: INSERT image row,
-        // Phase 2: UPDATE with eval fields after analyzer finishes).
-        sessionStorage.setItem("gallery-poll-until", String(Date.now() + 90_000));
-        // Show "running analysis" pill on the Generate page while the
-        // backend's Phase 2 analyzer call runs. Auto-dismiss after 25s
-        // (covers the 95th-percentile analyze latency).
-        setAnalyzingImages(true);
-        setTimeout(() => setAnalyzingImages(false), 25_000);
-        // Kick an immediate invalidate so the row appears asap.
-        setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
-          queryClient.invalidateQueries({ queryKey: listBatchesKey() });
-        }, 3000);
-      },
-      onError: (_index, error) => toast.error(`Generation failed: ${error}`),
-    }, () => setGenerating(false));
-    stopRef.current = cleanup;
-  }, [prompt, n, folder, quality, size, outputFormat, imageModelId, singleModel, complexity, transparent, styleGuidelineId, guidelines, mode, uploadedImages, queryClient]);
+    runStream(url, formData, n);
+  }, [prompt, n, folder, quality, size, outputFormat, imageModelId, singleModel, complexity, transparent, styleGuidelineId, guidelines, mode, uploadedImages, sourceBatchId, sourceImageId, runStream, runSvg]);
+
+  const handleComposeSubmit = useCallback((formData: FormData, count: number) => {
+    runStream("/api/compose", formData, count);
+  }, [runStream]);
+
+  const openAdapt = useCallback((img: GeneratedImage) => {
+    setAdaptSource({ kind: "result", b64: img.b64, mime: img.mime ?? "image/png" });
+    setAdaptOpen(true);
+  }, []);
+
+  const handleAdapt = useCallback((formats: string[]) => {
+    if (!adaptSource) return;
+    const formData = new FormData();
+    for (const f of formats) formData.append("formats", f);
+    if (adaptSource.kind === "result") {
+      const bytes = Uint8Array.from(atob(adaptSource.b64), (c) => c.charCodeAt(0));
+      formData.set("source", new File([bytes], "creative.png", { type: adaptSource.mime }));
+      formData.set("folder", folder);
+    } else {
+      formData.set("source_batch_id", adaptSource.batchId);
+      formData.set("source_image_id", String(adaptSource.imageId));
+      formData.set("folder", adaptSource.folder ?? folder);
+    }
+    if (imageModelId) formData.set("image_model", imageModelId);
+    if (styleGuidelineId !== "none") {
+      const g = guidelines.find((x) => String(x.id) === styleGuidelineId);
+      if (g?.body?.trim()) formData.set("criteria", g.body.trim());
+    }
+    const labels = formats.map((key) => formatPresets.find((p) => p.key === key)?.label ?? key);
+    setAdaptOpen(false);
+    runStream("/api/adapt", formData, formats.length, labels);
+  }, [adaptSource, folder, imageModelId, styleGuidelineId, guidelines, formatPresets, runStream]);
 
   const updateVariationLabel = useCallback((index: number, label: string) => {
     setVariations((prev) =>
@@ -746,13 +817,16 @@ function GeneratePage() {
       <div className="flex-1 flex flex-col lg:flex-row gap-0">
         {/* Controls panel */}
         <aside className="w-full lg:w-[26rem] shrink-0 border-r p-4 flex flex-col overflow-y-auto max-h-[calc(100vh-4rem)]">
-          {/* Three-way mode toggle */}
+          {/* Mode toggle */}
           <div className="flex rounded-lg border p-1 bg-muted/30 mb-3">
             <button type="button" className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${mode === "single" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`} onClick={() => { setMode("single"); setSourceBatchId(null); setSourceImageId(null); }}>
               Single
             </button>
-            <button type="button" className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${mode === "edit" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setMode("edit")}>
+            <button type="button" className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${mode === "edit" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`} onClick={() => { setMode("edit"); if (outputFormat === SVG_FORMAT) setOutputFormat("png"); }}>
               Edit
+            </button>
+            <button type="button" className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${mode === "compose" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setMode("compose")}>
+              Compose
             </button>
             <button type="button" className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${mode === "batch" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setMode("batch")}>
               Batch
@@ -841,46 +915,64 @@ function GeneratePage() {
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Size</Label>
-                  <SizeSelectAdvanced value={size} onChange={setSize} fixedSizes={singleModel?.sizes ?? null} onValidityChange={setSizeValid} />
+                  {isSvg ? (
+                    <p className="h-8 flex items-center text-[11px] text-muted-foreground">Vector — scales to any size</p>
+                  ) : (
+                    <SizeSelectAdvanced value={size} onChange={setSize} fixedSizes={singleModel?.sizes ?? null} onValidityChange={setSizeValid} />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Format</Label>
-                  <Select value={outputFormat} onValueChange={setOutputFormat}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="png">PNG</SelectItem><SelectItem value="jpeg">JPEG</SelectItem><SelectItem value="webp">WebP</SelectItem></SelectContent></Select>
+                  <Select value={outputFormat} onValueChange={setOutputFormat}>
+                    <SelectTrigger className="h-8 text-xs"><span>{FORMAT_LABELS[outputFormat] ?? outputFormat}</span></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="png">PNG</SelectItem>
+                      <SelectItem value="jpeg">JPEG</SelectItem>
+                      <SelectItem value="webp">WebP</SelectItem>
+                      {mode === "single" && selectedModel?.supports_svg && (
+                        <SelectItem value={SVG_FORMAT}>SVG (vector)</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Count</Label>
-                  <Select value={String(n)} onValueChange={(v) => setN(Number(v))}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 4].map((i) => (<SelectItem key={i} value={String(i)}>{i}</SelectItem>))}</SelectContent></Select>
+                  {isSvg ? (
+                    <p className="h-8 flex items-center text-[11px] text-muted-foreground">1 per request</p>
+                  ) : (
+                    <Select value={String(n)} onValueChange={(v) => setN(Number(v))}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 4].map((i) => (<SelectItem key={i} value={String(i)}>{i}</SelectItem>))}</SelectContent></Select>
+                  )}
                 </div>
-                {singleModel?.supports_complexity && (
+                {isSvg && (
+                  <p className="col-span-2 text-[11px] text-muted-foreground">
+                    Editable SVG paths for icons, illustrations and brand marks. Takes about a minute; vector
+                    results aren't scored by the judges.
+                  </p>
+                )}
+                {singleModel?.supports_complexity && !isSvg && (
                   <div className="space-y-1 col-span-2">
                     <Label className="text-xs">Complexity <span className="text-muted-foreground">(how much the model plans the scene)</span></Label>
-                    <Select value={complexity} onValueChange={setComplexity}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={COMPLEXITY_DEFAULT}>Model default</SelectItem>
-                        <SelectItem value="low">Low — quick edits</SelectItem>
-                        <SelectItem value="medium">Medium</SelectItem>
-                        <SelectItem value="high">High — many elements or constraints</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <ComplexitySelect value={complexity} onChange={setComplexity} />
                   </div>
                 )}
               </div>
 
               {(mode === "single" || mode === "edit") && (
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={transparent}
-                      onChange={(e) => handleTransparentToggle(e.target.checked)}
-                      className="rounded border-input"
-                    />
-                    <span>Transparent background</span>
-                    {transparent && singleModel && singleModel.id !== imageModelId && (
-                      <span className="text-muted-foreground">— uses {singleModel.id}</span>
-                    )}
-                  </label>
+                  {!isSvg && (
+                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={transparent}
+                        onChange={(e) => handleTransparentToggle(e.target.checked)}
+                        className="rounded border-input"
+                      />
+                      <span>Transparent background</span>
+                      {transparent && singleModel && singleModel.id !== imageModelId && (
+                        <span className="text-muted-foreground">— uses {singleModel.id}</span>
+                      )}
+                    </label>
+                  )}
                   <div className="space-y-1">
                     <Label className="text-xs">Style guideline</Label>
                     <Select value={styleGuidelineId} onValueChange={setStyleGuidelineId}>
@@ -932,6 +1024,21 @@ function GeneratePage() {
                 )}
               </div>
             </form>
+          )}
+
+          {/* Compose form */}
+          {mode === "compose" && (
+            <ComposeForm
+              imageModels={imageModels}
+              imageModelId={imageModelId}
+              onImageModelChange={handleImageModelChange}
+              guidelines={guidelines}
+              folders={folders}
+              generating={generating}
+              onSubmit={handleComposeSubmit}
+              onStop={handleStop}
+              initialProduct={composeProduct}
+            />
           )}
 
           {/* Batch form */}
@@ -1135,11 +1242,13 @@ function GeneratePage() {
           ) : generating && images.length === 0 ? (
             /* Skeleton placeholders — shown immediately after clicking Generate */
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              {Array.from({ length: n }).map((_, i) => (
+              {Array.from({ length: expectedCount }).map((_, i) => (
                 <div key={i} className="aspect-square rounded-lg bg-muted/50 border relative overflow-hidden animate-shimmer">
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
                     <Sparkles className="h-8 w-8 text-muted-foreground/50 animate-pulse" />
-                    <p className="text-sm text-muted-foreground/50">Generating...</p>
+                    <p className="text-sm text-muted-foreground/50">
+                      {isSvg ? "Drawing vector… (about a minute)" : "Generating..."}
+                    </p>
                   </div>
                 </div>
               ))}
@@ -1167,13 +1276,21 @@ function GeneratePage() {
                     : img.partialCount === 2
                       ? "blur-md opacity-60 scale-[1.03]"
                       : "blur-sm opacity-80 scale-[1.01]";
+                const mime = img.mime ?? "image/png";
+                const isVector = mime === "image/svg+xml";
                 return (
-                  <div key={img.index} className="relative rounded-lg overflow-hidden border bg-muted">
+                  <div key={img.index} className="group relative rounded-lg overflow-hidden border bg-muted">
+                    {/* SVGs render through <img> only, so any markup can never script the page. */}
                     <img
-                      src={`data:image/png;base64,${img.b64}`}
-                      alt={`Generated ${img.index + 1}`}
-                      className={`w-full transition-all duration-[2s] ease-out ${blurClass}`}
+                      src={`data:${mime};base64,${img.b64}`}
+                      alt={img.label ?? `Generated ${img.index + 1}`}
+                      className={`w-full transition-all duration-[2s] ease-out ${blurClass} ${isVector ? "bg-white" : ""}`}
                     />
+                    {img.label && (
+                      <div className="absolute top-2 left-2">
+                        <Badge variant="secondary" className="text-xs">{img.label}</Badge>
+                      </div>
+                    )}
                     {!img.done && (
                       <div className="absolute bottom-0 left-0 right-0 h-1 bg-muted/50">
                         <div
@@ -1187,6 +1304,21 @@ function GeneratePage() {
                         <Badge className="bg-green-600 text-white text-xs">Saved</Badge>
                       </div>
                     )}
+                    {img.done && !generating && (
+                      <div className="absolute bottom-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {isVector ? (
+                          <Button size="sm" variant="secondary" className="h-7 text-xs" asChild>
+                            <a href={`data:${mime};base64,${img.b64}`} download="vector.svg">
+                              <Download className="h-3.5 w-3.5 mr-1" />SVG
+                            </a>
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={() => openAdapt(img)}>
+                            <Crop className="h-3.5 w-3.5 mr-1" />Adapt to formats
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1196,6 +1328,7 @@ function GeneratePage() {
         </main>
       </div>
 
+      <AdaptDialog source={adaptSource} open={adaptOpen} onOpenChange={setAdaptOpen} onAdapt={handleAdapt} />
     </div>
   );
 }

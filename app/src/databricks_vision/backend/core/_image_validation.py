@@ -10,6 +10,17 @@ from fastapi import HTTPException
 from image_gen import MODEL_PRESETS, enabled_image_models, resolve_image_model
 
 _COMPLEXITIES = {"low", "medium", "high"}
+# Streamed (raster) routes; SVG has its own non-streamed route (POST /api/generate-svg).
+_RASTER_FORMATS = ("png", "jpeg", "webp")
+
+
+def validate_raster_format(output_format: str) -> None:
+    if output_format not in _RASTER_FORMATS:
+        raise HTTPException(
+            400,
+            f"output_format must be one of {', '.join(_RASTER_FORMATS)}; got {output_format!r}"
+            " (use /api/generate-svg for SVG)",
+        )
 
 
 def validate_tool_request(

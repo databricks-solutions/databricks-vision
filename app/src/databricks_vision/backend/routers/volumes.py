@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from ..core import Dependencies
 from ..models import CatalogOut, FileEntryOut, SchemaOut, VolumeOut
@@ -8,6 +8,27 @@ from ..models import CatalogOut, FileEntryOut, SchemaOut, VolumeOut
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/volumes", tags=["volumes"])
+
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def _image_media_type(path: str) -> str:
+    """Validate *path* as a raster image under /Volumes/ and return its media type (400 if not)."""
+    if not path.startswith("/Volumes/") or ".." in path.split("/"):
+        raise HTTPException(400, "Path must be a file under /Volumes/")
+    ext = path[path.rfind("."):].lower() if "." in path.rsplit("/", 1)[-1] else ""
+    if ext not in _IMAGE_TYPES:
+        raise HTTPException(400, "Only PNG, JPEG and WebP files can be read")
+    return _IMAGE_TYPES[ext]
+
+
+def read_volume_image(ws, path: str) -> bytes:
+    """Read a raster image the app's service principal can access (same reach as /browse)."""
+    _image_media_type(path)
+    try:
+        return ws.files.download(path).contents.read()
+    except Exception as e:
+        raise HTTPException(404, f"Could not read {path}: {e}")
 
 
 @router.get("/catalogs", response_model=list[CatalogOut], operation_id="listCatalogs")
@@ -77,3 +98,9 @@ def browse_volume_files(path: str, ws: Dependencies.UserClient):
     except Exception as e:
         logger.exception("Failed to browse volume path: %s", path)
         raise HTTPException(500, f"Failed to browse volume: {e}")
+
+
+@router.get("/file", operation_id="getVolumeImage")
+def get_volume_image(path: str, ws: Dependencies.UserClient):
+    """Serve a Volume image picked in the volume browser (Compose slot previews)."""
+    return Response(content=read_volume_image(ws, path), media_type=_image_media_type(path))

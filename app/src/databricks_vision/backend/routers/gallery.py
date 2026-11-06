@@ -21,6 +21,11 @@ from ..models import FolderCreate, FolderOut, GeneratedImageOut
 
 router = APIRouter(tags=["gallery"])
 
+# batch_runs.batch_mode values that are one gallery image (not a multi-image batch job):
+# written by routers/generate.py (_save_and_analyze modes, and "vector" for SVG) and imports.
+SINGLE_IMAGE_MODES = ("single", "edit", "compose", "adapt", "vector")
+_SINGLE_IMAGE_MODES_SQL = ", ".join(f"'{m}'" for m in SINGLE_IMAGE_MODES)  # constants only
+
 
 def _pg_fetch(pool: ConnectionPool, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     with pool.connection() as conn:
@@ -86,7 +91,7 @@ def list_images(
         where.append("g.batch_id = %s")
         params.append(batch_id)
     if mode == "single":
-        where.append("br.batch_mode IN ('single', 'edit')")
+        where.append(f"br.batch_mode IN ({_SINGLE_IMAGE_MODES_SQL})")
     elif mode:
         where.append("br.batch_mode = %s")
         params.append(mode)
@@ -129,7 +134,7 @@ def delete_image(batch_id: str, image_id: int, db: Dependencies.DB, ws: Dependen
     remaining = _pg_fetch(db, "SELECT COUNT(*) AS cnt FROM generated_images WHERE batch_id = %s", (batch_id,))
     remaining_count = remaining[0]["cnt"] if remaining else 0
 
-    if remaining_count == 0 and image.get("batch_mode") in ("single", "edit"):
+    if remaining_count == 0 and image.get("batch_mode") in SINGLE_IMAGE_MODES:
         _pg_execute(db, "DELETE FROM batch_runs WHERE batch_id = %s", (batch_id,))
     else:
         successful = _pg_fetch(db, "SELECT COUNT(*) AS cnt FROM generated_images WHERE batch_id = %s AND status = 'success'", (batch_id,))
@@ -150,6 +155,19 @@ def delete_image(batch_id: str, image_id: int, db: Dependencies.DB, ws: Dependen
     return {"deleted": True}
 
 
+_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
+
+
+def _image_response(content: bytes, path: str) -> Response:
+    media_type = next((t for ext, t in _MEDIA_TYPES.items() if path.endswith(ext)), "image/png")
+    headers = {}
+    if media_type == "image/svg+xml":
+        # SVGs are checked to be static on save (image_gen.check_static_svg); this keeps any
+        # script inert even if the file is opened directly in a tab.
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    return Response(content=content, media_type=media_type, headers=headers)
+
+
 @router.get("/gallery/{batch_id}/{image_id}/file", operation_id="getGalleryImageFile")
 def get_image_file(batch_id: str, image_id: int, db: Dependencies.DB, ws: Dependencies.UserClient):
     rows = _pg_fetch(
@@ -164,13 +182,7 @@ def get_image_file(batch_id: str, image_id: int, db: Dependencies.DB, ws: Depend
     except Exception as e:
         raise HTTPException(404, f"Could not read image: {e}")
 
-    path = rows[0]["volume_path"]
-    media_type = "image/png"
-    if path.endswith(".jpg") or path.endswith(".jpeg"):
-        media_type = "image/jpeg"
-    elif path.endswith(".webp"):
-        media_type = "image/webp"
-    return Response(content=content, media_type=media_type)
+    return _image_response(content, rows[0]["volume_path"])
 
 
 @router.get("/gallery/{batch_id}/{image_id}/thumbnail", operation_id="getGalleryThumbnail")
@@ -193,8 +205,7 @@ def get_image_thumbnail(batch_id: str, image_id: int, db: Dependencies.DB, ws: D
     except Exception as e:
         raise HTTPException(404, f"Could not read thumbnail: {e}")
 
-    media_type = "image/webp" if path.endswith(".webp") else "image/png"
-    return Response(content=content, media_type=media_type)
+    return _image_response(content, path)
 
 
 # --- Folders ---
@@ -203,10 +214,10 @@ def get_image_thumbnail(batch_id: str, image_id: int, db: Dependencies.DB, ws: D
 def list_folders(db: Dependencies.DB):
     rows = _pg_fetch(
         db,
-        """SELECT f.id, f.name, f.created_at,
+        f"""SELECT f.id, f.name, f.created_at,
                   COUNT(g.id) AS image_count
            FROM folders f
-           LEFT JOIN batch_runs br ON br.folder = f.name AND br.batch_mode IN ('single', 'edit')
+           LEFT JOIN batch_runs br ON br.folder = f.name AND br.batch_mode IN ({_SINGLE_IMAGE_MODES_SQL})
            LEFT JOIN generated_images g ON g.batch_id = br.batch_id AND g.status = 'success'
            GROUP BY f.id, f.name, f.created_at
            ORDER BY f.name""",
@@ -315,6 +326,7 @@ async def analyze_images(
            FROM generated_images
            WHERE batch_id = %s
              AND status = 'success'
+             AND volume_path NOT LIKE '%%.svg'  -- vector rows aren't analyzed or embedded
              AND (description IS NULL OR metrics IS NULL OR embedding IS NULL)""",
         (batch_id,),
     )

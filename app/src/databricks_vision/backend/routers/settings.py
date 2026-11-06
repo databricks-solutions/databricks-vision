@@ -1,9 +1,9 @@
 """Runtime settings management."""
 from fastapi import APIRouter, Request
-from image_gen import MODEL_PRESETS, enabled_image_models
+from image_gen import FORMAT_PRESETS, MODEL_PRESETS, enabled_image_models
 
 from ..core._image_validation import validate_image_model
-from ..models import ImageModelOut, SettingsOut, SettingsUpdate
+from ..models import FormatPresetOut, ImageModelOut, SettingsOut, SettingsUpdate
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -36,8 +36,15 @@ def list_image_models():
             sizes=list(preset["sizes"]) if preset["sizes"] else None,
             supports_transparent=preset["supports_transparent"],
             supports_complexity=preset["supports_complexity"],
+            supports_svg=preset["supports_svg"],
         ))
     return models
+
+
+@router.get("/formats", response_model=list[FormatPresetOut], operation_id="listFormatPresets")
+def list_format_presets():
+    """Marketing formats offered by Compose and Adapt-to-formats."""
+    return [FormatPresetOut(key=key, **preset) for key, preset in FORMAT_PRESETS.items()]
 
 
 @router.put("", response_model=SettingsOut, operation_id="updateSettings")

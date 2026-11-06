@@ -118,6 +118,12 @@ export interface FileEntryOut {
     name: string;
     path: string;
 }
+export interface FormatPresetOut {
+    key: string;
+    label: string;
+    ratio: string;
+    size: string;
+}
 export interface FolderCreate {
     name: string;
 }
@@ -161,6 +167,7 @@ export interface ImageModelOut {
     qualities: string[];
     sizes?: string[] | null;
     supports_complexity: boolean;
+    supports_svg: boolean;
     supports_transparent: boolean;
 }
 export interface ImageVersionOut {
@@ -230,19 +237,26 @@ export interface StyleGuidelineCreate {
     body?: string;
     is_default?: boolean;
     name: string;
+    palette?: string[];
+    typography?: string;
 }
 export interface StyleGuidelineOut {
     body: string;
     created_at?: string | null;
     id: number;
     is_default: boolean;
+    logo_path?: string;
     name: string;
+    palette?: string[];
+    typography?: string;
     updated_at?: string | null;
 }
 export interface StyleGuidelineUpdate {
     body?: string | null;
     is_default?: boolean | null;
     name?: string | null;
+    palette?: string[] | null;
+    typography?: string | null;
 }
 export interface User {
     active?: boolean | null;
@@ -1913,6 +1927,45 @@ export function useListImageModelsSuspense<TData = {
     return useSuspenseQuery({
         queryKey: listImageModelsKey(),
         queryFn: ()=>listImageModels(),
+        ...options?.query
+    });
+}
+export const listFormatPresets = async (options?: RequestInit): Promise<{
+    data: FormatPresetOut[];
+}> =>{
+    const res = await fetch("/api/settings/formats", {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const listFormatPresetsKey = ()=>{
+    return [
+        "/api/settings/formats"
+    ] as const;
+};
+export function useListFormatPresets<TData = {
+    data: FormatPresetOut[];
+}>(options?: {
+    query?: Omit<UseQueryOptions<{
+        data: FormatPresetOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listFormatPresetsKey(),
+        queryFn: ()=>listFormatPresets(),
         ...options?.query
     });
 }
