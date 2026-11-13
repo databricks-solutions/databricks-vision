@@ -25,6 +25,8 @@ dependencies = [
 
 [dependency-groups]
 dev = ["image-gen"]
+# CI / test tooling, locked with hashes in uv.lock (scripts/test.sh installs it with --group test).
+test = ["pytest==9.2.0", "ruff==0.17.4"]
 
 [tool.uv.sources]
 image-gen = { path = "..", editable = true }
