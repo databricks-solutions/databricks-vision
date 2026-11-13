@@ -26,6 +26,12 @@ bundle:
 # (see DEPLOY.md).
 # ---------------------------------------------------------------------------
 variables:
+  app_name:
+    description: "Databricks App name (workspace-unique, lowercase letters/digits/hyphens, max 30 chars). Override per target to run more than one copy in a workspace."
+    default: databricks-vision
+  job_name:
+    description: "Name of the batch image-generation job."
+    default: batch-image-gen-job
   catalog:
     description: "Unity Catalog catalog name where the app's schema lives."
   schema_name:
@@ -78,10 +84,28 @@ targets:
       lakebase_database: projects/<project>/branches/<branch>/databases/<db-id>
       lakebase_db_host:  ep-<slug>.database.<region>.cloud.databricks.com
 
+  # Maintainers' shared dev app: a second copy of the app (own UC schema, Lakebase branch and
+  # MLflow experiment) alongside the live one, sharing its serving endpoints. Deliberately
+  # identifier-free. The host comes from the CLI profile or DATABRICKS_HOST. The variables
+  # without defaults (catalog, schema_name, lakebase_*) come from BUNDLE_VAR_* in
+  # deploy/vision-dev.env (gitignored; see deploy/example.env), or from the GitHub `dev`
+  # environment in CI. A missing value fails the deploy.
+  #
+  # No `mode: development`: dev mode roots each deployer in their own home folder, which would
+  # give a laptop deploy and a CI service-principal deploy two separate states fighting over one
+  # app. A shared root_path keeps one deployment state for both.
+  vision-dev:
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      app_name: databricks-vision-dev
+      job_name: batch-image-gen-job-dev
+      eval_experiment: /Shared/databricks-vision-eval-dev
+
 resources:
   apps:
     databricks-vision-app:
-      name: databricks-vision
+      name: ${var.app_name}
       description: "Databricks Vision — image generation, editing, and gallery"
       source_code_path: ./app/.build
       resources:
@@ -112,7 +136,7 @@ resources:
 
   jobs:
     batch-image-gen-job:
-      name: "batch-image-gen-job"
+      name: ${var.job_name}
       parameters:
         - name: batch_id
           default: ""

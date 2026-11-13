@@ -127,20 +127,25 @@ The `Host:` line should match your workspace URL.
 ./scripts/deploy.sh <your-target> <your-profile>
 ```
 
-The script chains four steps:
+The script chains five steps:
 
 1. **`render-app-yml.sh`** reads bundle variables via `databricks bundle summary` and renders `app/app.yml` from `app/app.yml.template` (the rendered `app.yml` is gitignored).
-2. **`databricks bundle deploy -t <target>`** builds the React app, uploads it, and creates four app resources: `image-gen-endpoint`, `siglip-embedding-endpoint`, `batch-gen-job`, `db`.
-3. **`post-deploy.sh`** PATCHes the Lakebase `db` resource as a safety net (the YAML declaration is the primary mechanism), grants the SP schema-level Postgres privileges, bootstraps the schema, and grants table-level privileges.
+2. **`databricks bundle deploy -t <target>`** builds the React app (`scripts/build-frontend.sh`, which fails if Tailwind is dropped), uploads it, and creates four app resources: `image-gen-endpoint`, `siglip-embedding-endpoint`, `batch-gen-job`, `db`.
+3. **`post-deploy.sh`**:
+   - PATCHes the Lakebase `db` resource as a safety net (the YAML declaration is the primary mechanism).
+   - Grants the SP schema-level Postgres privileges, bootstraps the schema and grants table-level privileges.
+   - Creates the app's UC volumes if missing and grants the SP `USE CATALOG`, `USE SCHEMA` and READ/WRITE on them (step 5 below, automated).
+   - Sets up the MLflow eval experiment.
 4. **`databricks bundle run databricks-vision-app -t <target>`** starts the app. First start takes ~2 minutes.
+5. **`smoke_test.py`** waits for the app to be `RUNNING`, then calls `/api/health` (Lakebase reachable), `/api/settings/image-models` and `/api/eval-criteria` as you. It fails the deploy if any check fails. Set `SKIP_SMOKE_TEST=1` to skip it, or run `uv run --no-project --with databricks-sdk python3 scripts/smoke_test.py --app <name> --generate` to also generate one low-quality image.
 
-Expect the app process to log Volume 403s after step 4 finishes — that's normal, fixed in the next step.
+The profile argument is optional: `deploy.sh` also reads `DATABRICKS_CONFIG_PROFILE` and any `BUNDLE_VAR_*` values from `deploy/<target>.env` (gitignored; copy `deploy/example.env`). That keeps workspace identifiers out of `databricks.yml` entirely.
 
 ---
 
 ## 5. Grant the app's service principal access to UC
 
-The app's SP is auto-created during the first deploy. Find its client ID:
+`post-deploy.sh` now applies these grants for you on every deploy. This section is kept for reference, and for granting access to any *other* catalogs or volumes you want the app to browse. The app's SP is auto-created during the first deploy. Find its client ID:
 
 ```bash
 databricks apps get databricks-vision -p <your-profile> -o json | jq -r '.service_principal_client_id'
@@ -168,6 +173,29 @@ UC grants take effect immediately — no redeploy needed. Open the app URL (prin
 ```
 
 The bundle handles incremental sync; only changed files are uploaded. If you edited `_SCHEMA_SQL` in `image_gen.py`, see *Troubleshooting → stale schema bootstrap*.
+
+---
+
+## 6a. Maintainers: the shared dev app (`vision-dev`)
+
+`databricks.yml` ships an identifier-free `vision-dev` target. It is a second copy of the app (`databricks-vision-dev`) in the same workspace as the live one, so changes can be deployed and smoke-tested before they reach users. It has its own UC schema, Lakebase branch, MLflow experiment and batch job, and shares the live app's `image-generator` and SigLIP serving endpoints, so there is no extra GPU spend. Its bundle state lives under `/Workspace/Shared/.bundle/databricks-vision/vision-dev`, so a maintainer's laptop and the (future) CI service principal deploy the same deployment.
+
+One-time setup (per workspace):
+
+1. **Lakebase branch.** Fork a `dev` branch from the live branch (it starts as a copy of the live data):
+   ```bash
+   databricks postgres create-branch projects/<project> dev \
+     --json '{"spec": {"source_branch": "projects/<project>/branches/production", "no_expiry": true}}' -p <profile>
+   databricks postgres list-endpoints projects/<project>/branches/dev -p <profile> -o json   # endpoint path + host
+   databricks postgres list-databases projects/<project>/branches/dev -p <profile> -o json   # database path
+   ```
+2. **UC schema.** `CREATE SCHEMA IF NOT EXISTS <catalog>.<schema>_dev;` (the volumes are created on first deploy).
+3. **Env file.** `cp deploy/example.env deploy/vision-dev.env` and fill in the profile, the dev schema and the dev-branch Lakebase values.
+4. **Deploy.** `./scripts/deploy.sh vision-dev`. It ends with the smoke test. Then grant your fellow maintainers **Can Use** on `databricks-vision-dev` (section 7).
+
+After that, `./scripts/deploy.sh vision-dev` is the pre-release check for any change. To refresh the dev data from live, delete the `dev` branch and fork it again, then redeploy. The redeploy re-applies the grants.
+
+Before a change to `databricks.yml` reaches the live app, check it with `databricks bundle plan -t <live-target>`: it should show only in-place updates, never an app or job recreate.
 
 ---
 

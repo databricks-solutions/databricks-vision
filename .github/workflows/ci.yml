@@ -1,8 +1,9 @@
 name: CI
 
-# Credential-free checks for every PR and every push to main: nothing here talks to a Databricks
-# workspace. Deploys run from a maintainer's laptop (./scripts/deploy.sh); see
-# .github/workflows/deploy-dev.yml for the opt-in OIDC dev deploy.
+# Credential-free checks for every PR and every push to main: none of the check jobs talk to a
+# Databricks workspace. Deploys run from a maintainer's laptop (./scripts/deploy.sh). The final
+# deploy-dev job is the opt-in OIDC dev deploy (deploy-dev.yml): it only runs for pushes to main,
+# after every check passed, and only once DEPLOY_DEV_ENABLED is set (see docs/ci-oidc.md).
 
 on:
   pull_request:
@@ -26,7 +27,7 @@ env:
 
 jobs:
   lockfiles:
-    name: Lockfiles
+    name: Lockfiles + scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -47,6 +48,8 @@ jobs:
         run: |
           uv lock --check
           uv lock --check --directory app
+      - name: shellcheck the deploy / build scripts
+        run: uvx --from shellcheck-py==0.11.0.1 shellcheck -x scripts/*.sh
 
   python:
     name: Python (ruff + pytest)
@@ -214,3 +217,12 @@ jobs:
           for r in $RESULTS; do
             [ "$r" = "success" ] || { echo "::error::a required CI job did not succeed ($r)"; exit 1; }
           done
+
+  deploy-dev:
+    name: Deploy dev app
+    needs: ci-ok
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_DEV_ENABLED == 'true'
+    permissions:
+      contents: read
+      id-token: write # passed to deploy-dev.yml for GitHub OIDC -> Databricks
+    uses: ./.github/workflows/deploy-dev.yml
