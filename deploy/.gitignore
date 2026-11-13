@@ -1,0 +1,3 @@
+# Per-target deploy settings hold workspace identifiers: keep them out of git.
+*.env
+!example.env
