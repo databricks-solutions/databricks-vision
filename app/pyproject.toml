@@ -61,3 +61,14 @@ exclude = ["src/databricks_vision/ui"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "../image_gen.py" = "image_gen.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs Postgres + pgvector (TEST_DATABASE_URL); see tests/integration/conftest.py",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -64,30 +64,6 @@ const FORMAT_LABELS: Record<string, string> = { png: "PNG", jpeg: "JPEG", webp: 
 
 type VariationRow = { label: string; prompt: string; edited: boolean };
 
-// Batch keeps a small fixed list — flexible/custom sizes are single + edit only for now.
-const SIZE_PRESETS: { value: string; label: string }[] = [
-  { value: "1024x1024", label: "Square (1024)" },
-  { value: "1536x1024", label: "Landscape (1536×1024)" },
-  { value: "1024x1536", label: "Portrait (1024×1536)" },
-  { value: "2048x1152", label: "Wide (2048×1152)" },
-  { value: "2048x2048", label: "Large Square (2048)" },
-];
-
-function SizeSelect({ value, onChange, className = "" }: { value: string; onChange: (v: string) => void; className?: string }) {
-  return (
-    <div className={`space-y-1 ${className}`}>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {SIZE_PRESETS.map((p) => (
-            <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
 // Size catalogue + custom validation for flexible-size models (gpt-image-2 and newer).
 // Mirrors backend validate_size in core/_image_validation.py.
 type SizePresetGroup = "1K" | "2K" | "4K";

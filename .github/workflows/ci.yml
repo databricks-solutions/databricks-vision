@@ -1,0 +1,213 @@
+name: CI
+
+# Credential-free checks for every PR and every push to main: nothing here talks to a Databricks
+# workspace. Deploys run from a maintainer's laptop (./scripts/deploy.sh); see
+# .github/workflows/deploy-dev.yml for the opt-in OIDC dev deploy.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Supersede in-flight PR runs; never cancel a run on main.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.13.5"
+  BUN_VERSION: "1.3.12"
+  UV_PYTHON: "3.11" # Databricks Apps runtime
+
+jobs:
+  lockfiles:
+    name: Lockfiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Lockfiles resolve against public registries
+        # Internal mirrors are unreachable for GitHub runners and for anyone deploying this repo.
+        run: |
+          if grep -nE 'pypi-proxy|npm-proxy' uv.lock app/uv.lock app/bun.lock; then
+            echo "::error::A lockfile references an internal package proxy. Re-lock against public PyPI / npm (see CONTRIBUTING.md)."
+            exit 1
+          fi
+      - name: uv.lock files match pyproject.toml
+        run: |
+          uv lock --check
+          uv lock --check --directory app
+
+  python:
+    name: Python (ruff + pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # pg17 tag, pinned by digest (Lakebase runs Postgres 17 + pgvector).
+        image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+        env:
+          # Disposable, job-scoped database: no password (avoids credential-shaped strings).
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql://postgres@localhost:5432/postgres
+      REQUIRE_DB_TESTS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            app/uv.lock
+      - name: Install the app environment from the lockfile
+        run: uv sync --frozen --directory app
+      - name: ruff + pytest (unit + integration)
+        run: ./scripts/test.sh
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: app
+        run: bun run typecheck
+      - name: Build (fails if Tailwind is dropped)
+        run: ./scripts/build-frontend.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-dist
+          path: app/src/databricks_vision/__dist__
+          if-no-files-found: error
+          retention-days: 3
+
+  wheel:
+    # Databricks Apps pip-installs the wheel with its *unpinned* dependencies on every deploy, so
+    # production runs whatever is latest on PyPI, not app/uv.lock. This job builds the wheel the
+    # same way, installs it fresh, and runs the whole test suite against that environment.
+    name: App wheel (latest deps)
+    needs: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # pg17 tag, pinned by digest (Lakebase runs Postgres 17 + pgvector).
+        image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+        env:
+          # Disposable, job-scoped database: no password (avoids credential-shaped strings).
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql://postgres@localhost:5432/postgres
+      REQUIRE_DB_TESTS: "1"
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ui-dist
+          path: app/src/databricks_vision/__dist__
+      - name: Write apx metadata (normally generated by `apx build`)
+        working-directory: app
+        run: |
+          uv run --no-project python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          meta = tomllib.loads(Path("pyproject.toml").read_text())["tool"]["apx"]["metadata"]
+          Path(meta["metadata-path"]).write_text(
+              f'app_name = "{meta["app-name"]}"\n'
+              f'app_module = "{meta["app-module"]}"\n'
+              f'app_slug = "{meta["app-slug"]}"\n'
+              f'api_prefix = "{meta["api-prefix"]}"\n'
+          )
+          PY
+      - name: Build the wheel
+        working-directory: app
+        env:
+          UV_DYNAMIC_VERSIONING_BYPASS: "0.0.0+ci"
+        run: uv build --wheel --out-dir dist
+      - name: Wheel contains the UI bundle, metadata and image_gen
+        working-directory: app
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          unzip -l "$WHEEL" > contents.txt
+          for f in databricks_vision/__dist__/index.html databricks_vision/_metadata.py image_gen.py; do
+            grep -q " $f\$" contents.txt || { echo "::error::$f missing from $WHEEL"; exit 1; }
+          done
+          ! grep -q "databricks_vision/ui/" contents.txt || { echo "::error::UI sources leaked into the wheel"; exit 1; }
+      - name: Fresh install resolves and the app imports
+        working-directory: app
+        run: |
+          uv venv /tmp/wheel-venv
+          uv pip install --python /tmp/wheel-venv dist/*.whl
+          uv pip list --python /tmp/wheel-venv | grep -iE '^(fastapi|starlette|pydantic|mlflow|databricks-sdk|psycopg|openai) '
+          cd /tmp && /tmp/wheel-venv/bin/python -c "
+          from databricks_vision.backend.app import app
+          import image_gen
+          assert '/api/health' in app.openapi()['paths']
+          print('imported OK')
+          "
+      - name: Test suite against the installed wheel
+        # tests/ import databricks_vision + image_gen from the installed wheel (not src/).
+        working-directory: app
+        run: |
+          uv pip install --python /tmp/wheel-venv "pytest==$(sed -nE 's/^PYTEST_VERSION="([^"]+)"/\1/p' ../scripts/test.sh)"
+          /tmp/wheel-venv/bin/python -m pytest
+
+  ci-ok:
+    # The single required status check: green only if every job above passed.
+    name: ci-ok
+    if: always()
+    needs: [lockfiles, python, frontend, wheel]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All CI jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = "success" ] || { echo "::error::a required CI job did not succeed ($r)"; exit 1; }
+          done

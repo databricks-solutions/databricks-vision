@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 from uuid import UUID, uuid4
 
 import psycopg
@@ -29,6 +29,9 @@ from PIL import Image as PILImage
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:  # notebook-only display type; IPython is not a runtime dependency
+    from IPython.display import HTML
 
 
 # ---------------------------------------------------------------------------

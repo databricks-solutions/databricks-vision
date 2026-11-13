@@ -987,7 +987,7 @@ export const editImages = async (data: Body_editImages, options?: RequestInit): 
             "Content-Type": "application/x-www-form-urlencoded",
             ...options?.headers
         },
-        body: new URLSearchParams(data as Record<string, string>)
+        body: new URLSearchParams(data as unknown as Record<string, string>)
     });
     if (!res.ok) {
         const body = await res.text();
@@ -1244,7 +1244,7 @@ export const analyzeGalleryImages = async (data: Body_analyzeGalleryImages, opti
             "Content-Type": "application/x-www-form-urlencoded",
             ...options?.headers
         },
-        body: new URLSearchParams(data as Record<string, string>)
+        body: new URLSearchParams(data as unknown as Record<string, string>)
     });
     if (!res.ok) {
         const body = await res.text();
@@ -1553,7 +1553,7 @@ export const generateImages = async (data: Body_generateImages, options?: Reques
             "Content-Type": "application/x-www-form-urlencoded",
             ...options?.headers
         },
-        body: new URLSearchParams(data as Record<string, string>)
+        body: new URLSearchParams(data as unknown as Record<string, string>)
     });
     if (!res.ok) {
         const body = await res.text();
@@ -1589,7 +1589,7 @@ export const importImages = async (data: Body_importImages, options?: RequestIni
             "Content-Type": "application/x-www-form-urlencoded",
             ...options?.headers
         },
-        body: new URLSearchParams(data as Record<string, string>)
+        body: new URLSearchParams(data as unknown as Record<string, string>)
     });
     if (!res.ok) {
         const body = await res.text();
@@ -1625,7 +1625,7 @@ export const rewritePrompt = async (data: Body_rewritePrompt, options?: RequestI
             "Content-Type": "application/x-www-form-urlencoded",
             ...options?.headers
         },
-        body: new URLSearchParams(data as Record<string, string>)
+        body: new URLSearchParams(data as unknown as Record<string, string>)
     });
     if (!res.ok) {
         const body = await res.text();

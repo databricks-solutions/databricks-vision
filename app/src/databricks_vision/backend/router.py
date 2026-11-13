@@ -1,10 +1,11 @@
 import urllib.request
 
 from databricks.sdk.service.iam import User as UserOut
+from fastapi import Request
 from pydantic import BaseModel
 
 from .core import Dependencies, create_router
-from .models import AppConfigOut, VersionOut
+from .models import AppConfigOut, HealthOut, VersionOut
 from .routers import (
     batch_images_router,
     batches_router,
@@ -33,6 +34,28 @@ router.include_router(eval_criteria_router)
 @router.get("/version", response_model=VersionOut, operation_id="version")
 async def version():
     return VersionOut.from_metadata()
+
+
+@router.get("/health", response_model=HealthOut, operation_id="health")
+def health(request: Request):
+    """Liveness + dependency check used by the post-deploy smoke test. Always 200 so a
+    degraded app still reports *what* is down; callers assert on the fields."""
+    pool = getattr(request.app.state, "db_pool", None)
+    db_ok = False
+    if pool is not None:
+        try:
+            with pool.connection(timeout=5) as conn:
+                conn.execute("SELECT 1")
+            db_ok = True
+        except Exception:
+            db_ok = False
+    eval_enabled = getattr(request.app.state, "image_evaluator", None) is not None
+    return HealthOut(
+        status="ok" if db_ok else "degraded",
+        version=VersionOut.from_metadata().version,
+        db=db_ok,
+        eval_enabled=eval_enabled,
+    )
 
 
 @router.get("/current-user", response_model=UserOut, operation_id="currentUser")

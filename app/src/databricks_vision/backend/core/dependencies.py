@@ -7,7 +7,9 @@ from psycopg_pool import ConnectionPool
 from ._defaults import ConfigDependency, ClientDependency, UserWorkspaceClientDependency
 from ._database import _DatabasePoolDependency
 from ._headers import HeadersDependency
-from ._image_gen_dep import _ImageGenDependency
+# Imported for its side effect: defining the class registers its lifespan hook with
+# LifespanDependency._registry (VisionWorkspace + evaluator setup). Do not remove.
+from ._image_gen_dep import _ImageGenDependency  # noqa: F401
 
 DatabasePoolDependency: TypeAlias = Annotated[
     ConnectionPool, _DatabasePoolDependency.depends()

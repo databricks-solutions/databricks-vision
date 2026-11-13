@@ -1,0 +1,14 @@
+# Keeps the SHA-pinned actions in .github/workflows current (Dependabot updates the SHA and the
+# version comment together). Application dependencies are deliberately not auto-bumped: the
+# lockfiles must be re-resolved against public PyPI / npm by a maintainer (see CONTRIBUTING.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
