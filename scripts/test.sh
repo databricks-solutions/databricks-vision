@@ -11,23 +11,26 @@
 #
 # Set REQUIRE_DB_TESTS=1 to fail (rather than skip) when no database is configured — CI does.
 #
-# Test tooling is pinned here and run ad hoc (`uv run --with` / `uvx`) so it never touches the
-# lockfiles, which must keep resolving against public PyPI for people deploying this repo.
+# Every package comes from app/uv.lock with its hashes verified: the app's dependencies plus the
+# `test` dependency group (pytest, ruff). The local projects (the app and image_gen.py) are not
+# built or installed — tests import them straight from the source tree via PYTHONPATH — so no
+# unpinned build backend runs either.
 
 set -euo pipefail
 
-RUFF_VERSION="0.17.4"
-PYTEST_VERSION="9.2.0"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR/.."
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT/app"
 
-echo "=== ruff ${RUFF_VERSION} ==="
-uvx "ruff@${RUFF_VERSION}" check .
+# --inexact: leave anything else in a developer's existing .venv (e.g. editable installs) alone.
+uv sync --frozen --group test --no-install-local --inexact --quiet
+export PYTHONPATH="$REPO_ROOT/app/src:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-echo "=== pytest ${PYTEST_VERSION} ==="
+echo "=== ruff ==="
+uv run --frozen --no-sync ruff check "$REPO_ROOT"
+
+echo "=== pytest ==="
 if [ -z "${TEST_DATABASE_URL:-}" ]; then
   echo "  (TEST_DATABASE_URL not set — integration tests will be skipped)"
 fi
-cd app
-MLFLOW_DISABLE_AGENT_HINT=1 uv run --frozen --with "pytest==${PYTEST_VERSION}" pytest "$@"
+MLFLOW_DISABLE_AGENT_HINT=1 uv run --frozen --no-sync pytest "$@"

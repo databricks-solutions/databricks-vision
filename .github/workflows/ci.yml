@@ -44,9 +44,10 @@ jobs:
             exit 1
           fi
       - name: uv.lock files match pyproject.toml
+        # --no-build: verify without running any package build backend.
         run: |
-          uv lock --check
-          uv lock --check --directory app
+          uv lock --check --no-build
+          uv lock --check --no-build --directory app
 
   python:
     name: Python (ruff + pytest)
@@ -80,9 +81,9 @@ jobs:
           cache-dependency-glob: |
             uv.lock
             app/uv.lock
-      - name: Install the app environment from the lockfile
-        run: uv sync --frozen --directory app
       - name: ruff + pytest (unit + integration)
+        # Installs app deps + the `test` group (pytest, ruff) from app/uv.lock with hashes verified,
+        # builds nothing, and tests the source tree. See scripts/test.sh.
         run: ./scripts/test.sh
 
   frontend:
@@ -113,10 +114,10 @@ jobs:
           retention-days: 3
 
   wheel:
-    # Databricks Apps pip-installs the wheel with its *unpinned* dependencies on every deploy, so
-    # production runs whatever is latest on PyPI, not app/uv.lock. This job builds the wheel the
-    # same way, installs it fresh, and runs the whole test suite against that environment.
-    name: App wheel (latest deps)
+    # Builds the deployable wheel (UI bundle + image_gen.py), installs it into a clean venv on top of
+    # the hash-locked dependency set from app/uv.lock, and runs the whole test suite against the
+    # *installed* artifact. Every package, including the build backend, is hash-verified.
+    name: App wheel
     needs: frontend
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -163,11 +164,11 @@ jobs:
               f'api_prefix = "{meta["api-prefix"]}"\n'
           )
           PY
-      - name: Build the wheel
+      - name: Build the wheel (hash-pinned build backend)
         working-directory: app
         env:
           UV_DYNAMIC_VERSIONING_BYPASS: "0.0.0+ci"
-        run: uv build --wheel --out-dir dist
+        run: uv build --wheel --out-dir dist --build-constraints build-constraints.txt --require-hashes
       - name: Wheel contains the UI bundle, metadata and image_gen
         working-directory: app
         run: |
@@ -177,14 +178,17 @@ jobs:
             grep -q " $f\$" contents.txt || { echo "::error::$f missing from $WHEEL"; exit 1; }
           done
           ! grep -q "databricks_vision/ui/" contents.txt || { echo "::error::UI sources leaked into the wheel"; exit 1; }
-      - name: Fresh install resolves and the app imports
+      - name: Install the wheel on the locked dependency set
         working-directory: app
         run: |
+          # Runtime deps + `test` group (pytest), exported from uv.lock with sha256 hashes.
+          uv export --frozen --no-dev --group test --no-emit-project --format requirements.txt -o /tmp/requirements.lock.txt
           uv venv /tmp/wheel-venv
-          # Latest versions on purpose (that is what production installs), but prebuilt wheels
-          # only: --no-build refuses source distributions, so no package build code runs here.
-          uv pip install --python /tmp/wheel-venv --no-build dist/*.whl
-          uv pip list --python /tmp/wheel-venv | grep -iE '^(fastapi|starlette|pydantic|mlflow|databricks-sdk|psycopg|openai) '
+          uv pip install --python /tmp/wheel-venv --require-hashes --no-build -r /tmp/requirements.lock.txt
+          # The wheel itself has no dependencies of its own to fetch: everything is already locked.
+          uv pip install --python /tmp/wheel-venv --no-deps dist/*.whl
+          # Fails if the wheel's declared requirements aren't satisfied by the locked set.
+          uv pip check --python /tmp/wheel-venv
           cd /tmp && /tmp/wheel-venv/bin/python -c "
           from databricks_vision.backend.app import app
           import image_gen
@@ -194,9 +198,7 @@ jobs:
       - name: Test suite against the installed wheel
         # tests/ import databricks_vision + image_gen from the installed wheel (not src/).
         working-directory: app
-        run: |
-          uv pip install --python /tmp/wheel-venv --no-build "pytest==$(sed -nE 's/^PYTEST_VERSION="([^"]+)"/\1/p' ../scripts/test.sh)"
-          /tmp/wheel-venv/bin/python -m pytest
+        run: /tmp/wheel-venv/bin/python -m pytest
 
   ci-ok:
     # The single required status check: green only if every job above passed.
