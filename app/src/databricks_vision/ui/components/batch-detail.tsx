@@ -132,7 +132,7 @@ function BatchDetail({ batchId, onDeleted }: { batchId: string; onDeleted?: () =
 
   const { data: detail, refetch: refetchDetail, isFetching } = useGetBatchDetail({
     params: { batch_id: batchId },
-    query: { ...selector<BatchDetailOut>().query, keepPreviousData: false },
+    query: selector<BatchDetailOut>().query,
   });
 
   const isRunning = detail?.batch.status === "running";
@@ -289,7 +289,7 @@ function BatchDetail({ batchId, onDeleted }: { batchId: string; onDeleted?: () =
       {images.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {images.map((img) => (
-            <Card key={img.id} className="group overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all" onClick={() => img.status === "success" ? setSelectedImage({ ...img, id: img.id!, batch_id: img.batch_id, tags: img.tags ?? [], description: img.description ?? null, thumbnail_path: img.thumbnail_path ?? null, reference_image_path: batch.reference_image_path, input_image_path: img.input_image_path }) : null}>
+            <Card key={img.id} className="group overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all" onClick={() => img.status === "success" ? setSelectedImage({ ...img, id: img.id!, batch_id: img.batch_id, image_name: img.image_name ?? null, prompt: img.prompt ?? null, status: img.status ?? null, volume_path: img.volume_path ?? null, variation_label: img.variation_label ?? null, metrics: img.metrics as ImageDialogImage["metrics"], tags: img.tags ?? [], description: img.description ?? null, thumbnail_path: img.thumbnail_path ?? null, reference_image_path: batch.reference_image_path, input_image_path: img.input_image_path }) : null}>
               <CardContent className="p-0">
                 <div className="relative">
                   {img.status === "success" && img.volume_path ? (

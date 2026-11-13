@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 from io import BytesIO
-from typing import Any, AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from image_gen import (
@@ -36,6 +36,9 @@ from ..core._image_validation import (
 from ..models import StyleGuidelineOut
 from .style_guidelines import get_brand_kit, read_logo
 from .volumes import read_volume_image
+
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
 
 router = APIRouter(tags=["generate"])
 

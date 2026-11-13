@@ -29,3 +29,13 @@ only-include = ["image_gen.py", "README.md"]
 dev = [
     "ipykernel>=7.2.0",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["notebooks", "app/.build", "app/.apx", "app/node_modules"]
+
+[tool.ruff.lint]
+# Start with the fatal set only (syntax errors, undefined names) so CI is a hard, zero-noise gate.
+# Widening to F401/I is a follow-up — note core/dependencies.py relies on a side-effect import.
+select = ["E9", "F63", "F7", "F82"]

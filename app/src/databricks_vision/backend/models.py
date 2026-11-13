@@ -262,6 +262,13 @@ class FileEntryOut(BaseModel):
 
 # --- App config ---
 
+class HealthOut(BaseModel):
+    status: str  # "ok" when every configured dependency answered; "degraded" otherwise
+    version: str
+    db: bool  # Lakebase pool answered SELECT 1 (False when no pool is configured)
+    eval_enabled: bool  # MLflow ImageEvaluator initialised at startup
+
+
 class AppConfigOut(BaseModel):
     workspace_url: str
     org_id: str = ""

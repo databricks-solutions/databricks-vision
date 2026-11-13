@@ -70,7 +70,7 @@ function GalleryPage() {
   const [searchMode, setSearchMode] = useState<SearchMode>("semantic");
   const [searchKind, setSearchKind] = useState<"text" | "by-image" | "similar">("text");
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [, setSearching] = useState(false);
 
   // Pick up search from navbar (cross-page)
   useEffect(() => {
@@ -114,7 +114,9 @@ function GalleryPage() {
       refetchInterval: pollEnabled ? 4000 : false,
     },
   });
-  const items: GalleryImage[] = galleryData?.data ?? [];
+  // The API serializes every field (null when unset), so rows always carry these keys even
+  // though the generated GeneratedImageOut type marks defaulted fields optional.
+  const items = (galleryData?.data ?? []) as GalleryImage[];
 
   // We track only the (batch_id, id) of the open dialog. The full image data
   // is derived from items/searchResults on every render — that way refetches
@@ -330,17 +332,6 @@ function GalleryPage() {
     }
   }
 
-
-  function imageSrc(img: GalleryImage): string {
-    return `/api/batch-images/${img.batch_id}/${img.image_name}_generated.jpeg`;
-  }
-
-  function thumbnailSrc(img: GalleryImage): string {
-    if (img.thumbnail_path) {
-      return `/api/gallery/${img.batch_id}/${img.id}/thumbnail`;
-    }
-    return imageSrc(img);
-  }
 
   // Determine what to display
   const displayItems: GalleryImage[] = searchResults ?? items;

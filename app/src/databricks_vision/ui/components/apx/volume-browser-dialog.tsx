@@ -312,8 +312,6 @@ export default function VolumeBrowserDialog({
                   })
                   .map((entry) => {
                     const isImage = !entry.is_directory && matchesFilter(entry.name, fileFilter);
-                    const isSelectable =
-                      entry.is_directory || (mode === "file" && isImage);
                     const isSelected = selectedFile === entry.path;
                     const isDimmed = mode === "file" && !entry.is_directory && !isImage;
 

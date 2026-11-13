@@ -55,7 +55,9 @@ sync:
 
 artifacts:
   default:
-    build: cd app && PATH=.bin:$PATH apx build .
+    # build-frontend.sh runs the Vite build (app/vite.config.ts) and fails if Tailwind was dropped;
+    # apx then packages the wheel + app.yml into app/.build without rebuilding the UI.
+    build: ./scripts/build-frontend.sh && cd app && PATH=.bin:$PATH apx build . --skip-ui-build
 
 # ---------------------------------------------------------------------------
 # Targets. Add one entry per workspace you deploy to. Replace every

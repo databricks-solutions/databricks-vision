@@ -1,0 +1,8 @@
+# GitHub only honours a file named exactly CODEOWNERS (in .github/, the repo root, or docs/), so
+# CODEOWNERS.txt at the root is informational only. Keep the two in sync.
+*                @jacksandom @andreaskopp
+
+# CI and deploy tooling: changes here alter what runs with workspace access.
+/.github/        @jacksandom @andreaskopp
+/scripts/        @jacksandom @andreaskopp
+/databricks.yml  @jacksandom @andreaskopp
