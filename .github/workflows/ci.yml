@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: read # every job only reads the repo; no job is granted more
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -97,8 +97,9 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
+        # Exact versions + integrity hashes from bun.lock; no dependency lifecycle scripts.
         working-directory: app
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
       - name: Typecheck
         working-directory: app
         run: bun run typecheck
@@ -180,7 +181,9 @@ jobs:
         working-directory: app
         run: |
           uv venv /tmp/wheel-venv
-          uv pip install --python /tmp/wheel-venv dist/*.whl
+          # Latest versions on purpose (that is what production installs), but prebuilt wheels
+          # only: --no-build refuses source distributions, so no package build code runs here.
+          uv pip install --python /tmp/wheel-venv --no-build dist/*.whl
           uv pip list --python /tmp/wheel-venv | grep -iE '^(fastapi|starlette|pydantic|mlflow|databricks-sdk|psycopg|openai) '
           cd /tmp && /tmp/wheel-venv/bin/python -c "
           from databricks_vision.backend.app import app
@@ -192,7 +195,7 @@ jobs:
         # tests/ import databricks_vision + image_gen from the installed wheel (not src/).
         working-directory: app
         run: |
-          uv pip install --python /tmp/wheel-venv "pytest==$(sed -nE 's/^PYTEST_VERSION="([^"]+)"/\1/p' ../scripts/test.sh)"
+          uv pip install --python /tmp/wheel-venv --no-build "pytest==$(sed -nE 's/^PYTEST_VERSION="([^"]+)"/\1/p' ../scripts/test.sh)"
           /tmp/wheel-venv/bin/python -m pytest
 
   ci-ok:

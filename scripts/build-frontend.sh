@@ -18,8 +18,8 @@ cd "$SCRIPT_DIR/../app"
 MIN_CSS_BYTES="${MIN_CSS_BYTES:-45000}"
 
 if [ ! -d node_modules ]; then
-  echo "Installing frontend dependencies (bun install --frozen-lockfile) ..."
-  bun install --frozen-lockfile
+  echo "Installing frontend dependencies (bun install --frozen-lockfile --ignore-scripts) ..."
+  bun install --frozen-lockfile --ignore-scripts
 fi
 
 echo "Building frontend (react + tailwind v4) -> src/databricks_vision/__dist__ ..."
