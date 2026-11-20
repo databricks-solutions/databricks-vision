@@ -50,7 +50,7 @@ jobs:
           uv lock --check --no-build --directory app
 
   python:
-    name: Python (ruff + pytest)
+    name: Python (ruff + zizmor + pytest)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -82,7 +82,7 @@ jobs:
             uv.lock
             app/uv.lock
       - name: ruff + pytest (unit + integration)
-        # Installs app deps + the `test` group (pytest, ruff) from app/uv.lock with hashes verified,
+        # Installs app deps + the `test` group (pytest, ruff, zizmor) from app/uv.lock with hashes verified,
         # builds nothing, and tests the source tree. See scripts/test.sh.
         run: ./scripts/test.sh
 
