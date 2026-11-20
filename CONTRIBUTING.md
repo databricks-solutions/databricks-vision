@@ -43,7 +43,7 @@ cd app && bun install --frozen-lockfile && bun run typecheck && cd .. && ./scrip
 
 `uv.lock`, `app/uv.lock` and `app/bun.lock` must resolve against **public** PyPI and npm, because GitHub runners and external users can't reach internal mirrors. CI fails if a lockfile references `pypi-proxy` or `npm-proxy`. If your network forces a mirror, don't commit the re-resolved lockfile your deploy build produces. To add a dependency, re-lock and then map the mirror URLs back to `https://pypi.org/simple` / `https://files.pythonhosted.org/packages/` (uv), or to `""` (bun's default-registry form). The file paths are identical.
 
-`scripts/test.sh` also audits the workflows with [zizmor](https://docs.zizmor.sh) (offline). GitHub code scanning (CodeQL) is deliberately not used: its analysis runs, but the result upload is refused from GitHub-hosted runners because of the organization's IP allow list, so it could only ever report failures.
+`scripts/test.sh` also audits the workflows with [zizmor](https://docs.zizmor.sh) (offline). GitHub code scanning (CodeQL) and the dependency-review action are deliberately not used: both need GitHub API calls that the organization's IP allow list refuses from GitHub-hosted runners, so they could only ever report failures. Vulnerable dependencies are caught by Dependabot alerts and security updates instead.
 
 Everything CI installs from PyPI is hash-pinned. Test tools (pytest, ruff) live in the `test` dependency group of `app/pyproject.toml`, so they're in `app/uv.lock`. The wheel's build backend is pinned in `app/build-constraints.txt`; regenerate that file whenever `[build-system]` changes (the command is in its header).
 
