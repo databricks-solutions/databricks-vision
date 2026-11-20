@@ -1,0 +1,65 @@
+name: Deploy dev app
+
+# Opt-in, OIDC-only deploy of the shared dev app (`vision-dev` target). Called by ci.yml after every
+# check passes on a push to main (never for pull requests), or run manually on main.
+#
+# SWITCHED OFF until docs/ci-oidc.md has been completed: the job runs only when the repository
+# variable DEPLOY_DEV_ENABLED is 'true' (only repo admins can set it). Auth is GitHub OIDC
+# workload identity federation, so no Databricks secret is stored anywhere. The workspace
+# identifiers are environment *secrets* only so that they are masked in this public repo's logs.
+#
+# Until then, maintainers deploy the dev app from a laptop: ./scripts/deploy.sh vision-dev
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_DEV_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    name: Deploy vision-dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev # deployment branch rule: main only
+    permissions:
+      contents: read
+      id-token: write # mint the GitHub OIDC token that Databricks exchanges for a short-lived SP token
+    env:
+      DATABRICKS_AUTH_TYPE: github-oidc
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      BUNDLE_VAR_catalog: ${{ secrets.BUNDLE_VAR_CATALOG }}
+      BUNDLE_VAR_schema_name: ${{ secrets.BUNDLE_VAR_SCHEMA_NAME }}
+      BUNDLE_VAR_lakebase_endpoint: ${{ secrets.BUNDLE_VAR_LAKEBASE_ENDPOINT }}
+      BUNDLE_VAR_lakebase_branch: ${{ secrets.BUNDLE_VAR_LAKEBASE_BRANCH }}
+      BUNDLE_VAR_lakebase_database: ${{ secrets.BUNDLE_VAR_LAKEBASE_DATABASE }}
+      BUNDLE_VAR_lakebase_db_host: ${{ secrets.BUNDLE_VAR_LAKEBASE_DB_HOST }}
+      UV_PYTHON: "3.11"
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: databricks/setup-cli@2da6132749245fbffb3c10d57cec219de3669967 # v1.26.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.5"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.12"
+      - name: Install apx (the app build toolchain)
+        run: uv tool install "apx @ git+https://github.com/databricks-solutions/apx@734e5cd7d85fc863b4faa3d217a7f2483bd65c39"
+      - name: Install frontend dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Check the OIDC identity
+        run: databricks current-user me -o json | jq -r '"Deploying as \(.userName)"'
+      - name: Deploy + smoke test
+        run: ./scripts/deploy.sh vision-dev
