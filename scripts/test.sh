@@ -1,5 +1,5 @@
 #!/bin/bash
-# test.sh — The checks CI runs: ruff (fatal rules), zizmor (workflow audit), pytest.
+# test.sh — The checks CI runs: ruff (fatal rules), shellcheck, zizmor (workflow audit), pytest.
 #
 # Usage: ./scripts/test.sh [pytest args...]      e.g. ./scripts/test.sh -k gallery -x
 #
@@ -12,7 +12,7 @@
 # Set REQUIRE_DB_TESTS=1 to fail (rather than skip) when no database is configured — CI does.
 #
 # Every package comes from app/uv.lock with its hashes verified: the app's dependencies plus the
-# `test` dependency group (pytest, ruff, zizmor). The local projects (the app and image_gen.py) are not
+# `test` dependency group (pytest, ruff, shellcheck, zizmor). The local projects (the app and image_gen.py) are not
 # built or installed — tests import them straight from the source tree via PYTHONPATH — so no
 # unpinned build backend runs either.
 
@@ -28,6 +28,10 @@ export PYTHONPATH="$REPO_ROOT/app/src:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "=== ruff ==="
 uv run --frozen --no-sync ruff check "$REPO_ROOT"
+
+echo "=== shellcheck ==="
+# From the repo root: the scripts' `# shellcheck source=scripts/...` directives are root-relative.
+(cd "$REPO_ROOT" && uv run --frozen --no-sync --project app shellcheck -x scripts/*.sh)
 
 echo "=== zizmor (workflow audit) ==="
 # Offline: zizmor never calls the GitHub API, so it works from any runner. Default persona —

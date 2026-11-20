@@ -9,7 +9,7 @@
 
 - [ ] `./scripts/test.sh` (with `TEST_DATABASE_URL` set, if you touched SQL or routes)
 - [ ] `cd app && bun run typecheck` (if you touched the UI)
-- [ ] Deployed to a dev target and checked the app (`./scripts/deploy.sh <target> <profile>`)
+- [ ] Deployed to the dev app; the smoke test passed (`./scripts/deploy.sh vision-dev`)
 - [ ] `databricks bundle validate` (if you touched `databricks.yml`)
 
 ## Checklist

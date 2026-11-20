@@ -26,7 +26,7 @@ dependencies = [
 [dependency-groups]
 dev = ["image-gen"]
 # CI / test tooling, locked with hashes in uv.lock (scripts/test.sh installs it with --group test).
-test = ["pytest==9.2.0", "ruff==0.17.4", "zizmor==1.32.0"]
+test = ["pytest==9.2.0", "ruff==0.17.4", "shellcheck-py==0.11.0.1", "zizmor==1.32.0"]
 
 [tool.uv.sources]
 image-gen = { path = "..", editable = true }

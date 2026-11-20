@@ -1,8 +1,7 @@
 name: CI
 
 # Credential-free checks for every PR and every push to main: nothing here talks to a Databricks
-# workspace. Deploys run from a maintainer's laptop (./scripts/deploy.sh); see
-# .github/workflows/deploy-dev.yml for the opt-in OIDC dev deploy.
+# workspace. Deploys run from a maintainer's laptop (./scripts/deploy.sh vision-dev for the dev app).
 
 on:
   pull_request:
@@ -50,7 +49,7 @@ jobs:
           uv lock --check --no-build --directory app
 
   python:
-    name: Python (ruff + zizmor + pytest)
+    name: Python (ruff + shellcheck + zizmor + pytest)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -82,7 +81,7 @@ jobs:
             uv.lock
             app/uv.lock
       - name: ruff + pytest (unit + integration)
-        # Installs app deps + the `test` group (pytest, ruff, zizmor) from app/uv.lock with hashes verified,
+        # Installs app deps + the `test` group (pytest, ruff, shellcheck, zizmor) from app/uv.lock with hashes verified,
         # builds nothing, and tests the source tree. See scripts/test.sh.
         run: ./scripts/test.sh
 
