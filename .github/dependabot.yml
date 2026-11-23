@@ -1,6 +1,9 @@
-# Keeps the SHA-pinned actions in .github/workflows current (Dependabot updates the SHA and the
-# version comment together). Application dependencies are deliberately not auto-bumped: the
-# lockfiles must be re-resolved against public PyPI / npm by a maintainer (see CONTRIBUTING.md).
+# 1. Version updates for the SHA-pinned actions in .github/workflows (Dependabot updates the SHA and
+#    the version comment together).
+# 2. Security updates only for the Python and frontend lockfiles. Routine version bumps are off
+#    (open-pull-requests-limit: 0, GitHub's documented switch for "security updates only"), and every
+#    security fix for one lockfile arrives as a single grouped PR instead of one PR per package.
+#    Dependabot resolves against public PyPI / npm, so its lockfiles keep the public URLs CI requires.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -12,3 +15,27 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: ci
+
+  - package-ecosystem: uv
+    directories: ["/", "/app"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: bun
+    directory: /app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      frontend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: deps
