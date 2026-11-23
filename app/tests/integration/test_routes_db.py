@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
 from databricks_vision.backend.core._eval import DEFAULT_CRITERIA
+from databricks_vision.backend.routers import gallery
+from databricks_vision.backend.routers.style_guidelines import batch_kit_rules
+from image_gen import ImageAnalysis, ImageMetrics
 from tests.integration.conftest import execute, fetch
 
 pytestmark = pytest.mark.integration
@@ -150,6 +154,65 @@ def test_logo_rejects_non_images(db_client):
         f"/api/style-guidelines/{kit['id']}/logo", files={"logo": ("x.txt", b"not an image", "text/plain")},
     )
     assert r.status_code == 400
+
+
+# --- a batch's brand kit reaches the judges ---------------------------------------------
+
+
+def _kit_id(db_client, name: str, body: str) -> int:
+    return db_client.post("/api/style-guidelines", json={"name": name, "body": body}).json()["id"]
+
+
+def _set_batch_kit(db, batch_id: str, kit_id: int | None) -> None:
+    execute(db, "UPDATE batch_runs SET style_guideline_id = %s WHERE batch_id = %s", (kit_id, batch_id))
+
+
+def test_batch_kit_rules(db_client, db):
+    kit = _kit_id(db_client, "Acme", "  Logo top-left only  ")
+    blank = _kit_id(db_client, "Blank", "   ")
+    for batch_id, kit_id in (("withkit", kit), ("blankkit", blank), ("nokit", None)):
+        _seed_batch(db, batch_id, mode="multi_image", images=1)
+        _set_batch_kit(db, batch_id, kit_id)
+
+    assert batch_kit_rules(db, "withkit") == "Logo top-left only"
+    assert batch_kit_rules(db, "blankkit") is None
+    assert batch_kit_rules(db, "nokit") is None
+    assert batch_kit_rules(db, "missing") is None
+
+    assert db_client.delete(f"/api/style-guidelines/{kit}").status_code == 200
+    assert batch_kit_rules(db, "withkit") is None  # a deleted kit just drops the rules
+
+
+def test_reanalyze_scores_a_batch_image_against_its_kit(app, db_client, db, fake_ws, monkeypatch):
+    kit = _kit_id(db_client, "Acme", "No competitor products")
+    _seed_batch(db, "kitbatch", mode="multi_image", images=1)
+    _set_batch_kit(db, "kitbatch", kit)
+    png = BytesIO()
+    Image.new("RGB", (4, 4)).save(png, format="PNG")
+    fake_ws.files.store["/Volumes/c/s/generated_images/kitbatch/img_1.png"] = png.getvalue()
+
+    seen: list[str | None] = []
+
+    async def fake_score(request, analyzer, image_bytes, prompt, criteria=None):
+        seen.append(criteria)
+        return ImageAnalysis(
+            description="d", tags=[], evaluation="e",
+            metrics=ImageMetrics(quality=5, prompt_adherence=5, purpose_fit=5, text_legibility=5, safe_content=5),
+            criteria_evaluation=f"checked: {criteria}",
+        )
+
+    monkeypatch.setattr(gallery, "_score_or_analyze", fake_score)
+    monkeypatch.setattr(gallery, "ImageAnalyzer", lambda **_: None)
+    monkeypatch.setattr(
+        app.state, "vision_workspace",
+        SimpleNamespace(openai=None, openai_for_token=lambda _t: None, embed_image=lambda _b: None),
+        raising=False,
+    )
+
+    r = db_client.post("/api/gallery/kitbatch/1/analyze")
+    assert r.status_code == 200, r.text
+    assert seen == ["No competitor products"]
+    assert r.json()["criteria_evaluation"] == "checked: No competitor products"
 
 
 # --- folders + gallery ------------------------------------------------------------------

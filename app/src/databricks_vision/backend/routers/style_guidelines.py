@@ -95,6 +95,21 @@ def get_brand_kit(pool: ConnectionPool, guideline_id: int) -> StyleGuidelineOut:
     return _row_to_out(rows[0])
 
 
+def batch_kit_rules(pool: ConnectionPool, batch_id: str) -> str | None:
+    """The rules of the brand kit picked for a batch run, or None when the run has no kit, the
+    kit was deleted or its rules are empty. The judges score the batch's images against them
+    (as `criteria`) when the gallery analyzes it; the batch job itself doesn't score."""
+    rows = _pg_fetch(
+        pool,
+        """SELECT s.body FROM batch_runs b
+           JOIN style_guidelines s ON s.id = b.style_guideline_id
+           WHERE b.batch_id = %s""",
+        (batch_id,),
+    )
+    body = (rows[0].get("body") or "").strip() if rows else ""
+    return body or None
+
+
 @router.get(
     "/style-guidelines",
     response_model=list[StyleGuidelineOut],

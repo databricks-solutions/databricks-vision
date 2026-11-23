@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useCallback, useEffect } from "react";
 import Navbar from "@/components/apx/navbar";
 import { BatchDetailContent } from "@/components/batch-detail";
@@ -37,6 +37,7 @@ import {
 import VolumeBrowserDialog from "@/components/apx/volume-browser-dialog";
 import { AdaptDialog, type AdaptSource } from "@/components/adapt-dialog";
 import { ComposeForm } from "@/components/compose-form";
+import { BrandKitSelect, NO_KIT } from "@/components/brand-kit-select";
 import {
   COMPLEXITY_DEFAULT,
   ComplexitySelect,
@@ -280,7 +281,7 @@ function GeneratePage() {
   const { data: foldersData } = useListFolders();
   const folders = foldersData?.data ?? [];
 
-  // Style guidelines (managed in /settings)
+  // Brand kits (stored as style guidelines; managed in /settings)
   const { data: guidelinesData } = useListStyleGuidelines();
   const guidelines = guidelinesData?.data ?? [];
 
@@ -412,17 +413,20 @@ function GeneratePage() {
       toast.info(`Switched size to ${label} — transparent BG uses ${model?.id}`);
     }
   }, [imageModels, selectedModel, quality, size]);
-  // Apply the DB-marked default the first time the guidelines list arrives.
-  // After that the value is whatever the user has explicitly chosen.
-  const [styleGuidelineId, setStyleGuidelineId] = useState<string>("none");
-  const styleGuidelineInitedRef = useRef(false);
+  // Brand kit — one pick shared by Single / Edit / Compose / Adapt / Batch. Apply the DB-marked
+  // default the first time the kit list arrives; after that it's whatever the user chose.
+  const [brandKitId, setBrandKitId] = useState<string>(NO_KIT);
+  const brandKitInitedRef = useRef(false);
   useEffect(() => {
-    if (styleGuidelineInitedRef.current) return;
+    if (brandKitInitedRef.current) return;
     if (guidelines.length === 0) return; // wait until React Query has data
-    styleGuidelineInitedRef.current = true;
+    brandKitInitedRef.current = true;
     const dflt = guidelines.find((g) => g.is_default);
-    if (dflt) setStyleGuidelineId(String(dflt.id));
+    if (dflt) setBrandKitId(String(dflt.id));
   }, [guidelines]);
+  const brandKit = guidelines.find((g) => String(g.id) === brandKitId);
+  // Outside Compose only the kit's rules are used: the judges score against them as `criteria`.
+  const kitRules = brandKit?.body?.trim() ?? "";
   const [n, setN] = useState(1);
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -447,7 +451,6 @@ function GeneratePage() {
   const [batchQuality, setBatchQuality] = useState("auto");
   const [batchOutputFormat, setBatchOutputFormat] = useState("png");
   const [batchTransparent, setBatchTransparent] = useState(false);
-  const [batchStyleGuidelineId, setBatchStyleGuidelineId] = useState<string>("none");
 
   const batchModel = resolveImageModel(imageModels, selectedModel, batchTransparent);
 
@@ -647,13 +650,8 @@ function GeneratePage() {
     if (mode === "single" || mode === "edit") {
       formData.set("background", transparent ? "transparent" : "auto");
     }
-    // Resolve the selected style guideline body and ship as `criteria`.
-    if (mode === "single" || mode === "edit") {
-      if (styleGuidelineId !== "none") {
-        const g = guidelines.find((x) => String(x.id) === styleGuidelineId);
-        if (g?.body?.trim()) formData.set("criteria", g.body.trim());
-      }
-    }
+    // The brand kit's rules go to the judges as `criteria`; they don't change generation.
+    if ((mode === "single" || mode === "edit") && kitRules) formData.set("criteria", kitRules);
 
     const url = mode === "single" ? "/api/generate" : "/api/edit";
     if (mode !== "single") {
@@ -666,7 +664,7 @@ function GeneratePage() {
     }
 
     runStream(url, formData, n);
-  }, [prompt, n, folder, quality, size, outputFormat, imageModelId, singleModel, complexity, transparent, styleGuidelineId, guidelines, mode, uploadedImages, sourceBatchId, sourceImageId, runStream, runSvg]);
+  }, [prompt, n, folder, quality, size, outputFormat, imageModelId, singleModel, complexity, transparent, kitRules, mode, uploadedImages, sourceBatchId, sourceImageId, runStream, runSvg]);
 
   const handleComposeSubmit = useCallback((formData: FormData, count: number) => {
     runStream("/api/compose", formData, count);
@@ -691,14 +689,11 @@ function GeneratePage() {
       formData.set("folder", adaptSource.folder ?? folder);
     }
     if (imageModelId) formData.set("image_model", imageModelId);
-    if (styleGuidelineId !== "none") {
-      const g = guidelines.find((x) => String(x.id) === styleGuidelineId);
-      if (g?.body?.trim()) formData.set("criteria", g.body.trim());
-    }
+    if (kitRules) formData.set("criteria", kitRules);
     const labels = formats.map((key) => formatPresets.find((p) => p.key === key)?.label ?? key);
     setAdaptOpen(false);
     runStream("/api/adapt", formData, formats.length, labels);
-  }, [adaptSource, folder, imageModelId, styleGuidelineId, guidelines, formatPresets, runStream]);
+  }, [adaptSource, folder, imageModelId, kitRules, formatPresets, runStream]);
 
   const updateVariationLabel = useCallback((index: number, label: string) => {
     setVariations((prev) =>
@@ -721,8 +716,8 @@ function GeneratePage() {
     // records the model that actually serves the batch.
     const background = batchTransparent ? "transparent" : "opaque";
     const image_model = imageModelId;
-    const style_guideline_id =
-      batchStyleGuidelineId !== "none" ? Number(batchStyleGuidelineId) : null;
+    // Stored on the batch run; /api/gallery/analyze scores the images against the kit's rules.
+    const style_guideline_id = brandKit ? brandKit.id : null;
 
     if (batchMode === "multi_image") {
       if (!inputPath.startsWith("/Volumes/")) { toast.error("Input path must start with /Volumes/"); return; }
@@ -949,36 +944,16 @@ function GeneratePage() {
                       )}
                     </label>
                   )}
-                  <div className="space-y-1">
-                    <Label className="text-xs">Style guideline</Label>
-                    <Select value={styleGuidelineId} onValueChange={setStyleGuidelineId}>
-                      <SelectTrigger className="h-8 text-xs">
-                        {/* Custom trigger label — Radix's SelectValue derives text from a
-                            registered SelectItemText, which only mounts after the dropdown
-                            first opens. Rendering the label directly avoids the blank trigger. */}
-                        <span>
-                          {(() => {
-                            if (styleGuidelineId === "none") return "None";
-                            const sel = guidelines.find((g) => String(g.id) === styleGuidelineId);
-                            return sel ? `${sel.name}${sel.is_default ? " · default" : ""}` : "None";
-                          })()}
-                        </span>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none" className="text-xs">None</SelectItem>
-                        {guidelines.map((g) => (
-                          <SelectItem key={g.id} value={String(g.id)} className="text-xs">
-                            {g.name}{g.is_default ? " · default" : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {guidelines.length === 0 && (
-                      <p className="text-[10px] text-muted-foreground">
-                        No guidelines yet. Manage in <Link to="/settings" className="underline hover:text-foreground">Settings</Link>.
-                      </p>
-                    )}
-                  </div>
+                  {/* Vector results aren't scored, so a kit would do nothing there. */}
+                  {!isSvg && (
+                    <BrandKitSelect
+                      kits={guidelines}
+                      value={brandKitId}
+                      onChange={setBrandKitId}
+                      scope="generate"
+                      labelClassName="text-xs"
+                    />
+                  )}
                 </div>
               )}
 
@@ -1009,6 +984,8 @@ function GeneratePage() {
               imageModelId={imageModelId}
               onImageModelChange={handleImageModelChange}
               guidelines={guidelines}
+              kitId={brandKitId}
+              onKitChange={setBrandKitId}
               folders={folders}
               generating={generating}
               onSubmit={handleComposeSubmit}
@@ -1097,28 +1074,14 @@ function GeneratePage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Style guideline</Label>
-                  <Select value={batchStyleGuidelineId} onValueChange={setBatchStyleGuidelineId}>
-                    <SelectTrigger className="h-8 text-xs">
-                      <span>
-                        {(() => {
-                          if (batchStyleGuidelineId === "none") return "None";
-                          const sel = guidelines.find((g) => String(g.id) === batchStyleGuidelineId);
-                          return sel ? `${sel.name}${sel.is_default ? " · default" : ""}` : "None";
-                        })()}
-                      </span>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none" className="text-xs">None</SelectItem>
-                      {guidelines.map((g) => (
-                        <SelectItem key={g.id} value={String(g.id)} className="text-xs">
-                          {g.name}{g.is_default ? " · default" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <BrandKitSelect
+                  kits={guidelines}
+                  value={brandKitId}
+                  onChange={setBrandKitId}
+                  scope="batch"
+                  className="col-span-2"
+                  labelClassName="text-xs"
+                />
               </div>
 
               <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -1304,7 +1267,13 @@ function GeneratePage() {
         </main>
       </div>
 
-      <AdaptDialog source={adaptSource} open={adaptOpen} onOpenChange={setAdaptOpen} onAdapt={handleAdapt} />
+      <AdaptDialog
+        source={adaptSource}
+        open={adaptOpen}
+        onOpenChange={setAdaptOpen}
+        onAdapt={handleAdapt}
+        kit={brandKit}
+      />
     </div>
   );
 }

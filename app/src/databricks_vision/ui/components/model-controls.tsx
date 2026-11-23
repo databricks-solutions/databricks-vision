@@ -20,7 +20,7 @@ export function ModelSelect({
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-8 text-xs">
-        {/* Label rendered directly — the model list loads async (see the style-guideline select). */}
+        {/* Label rendered directly — the model list loads async (see BrandKitSelect). */}
         <span>{selected?.label ?? (value || "Loading…")}</span>
       </SelectTrigger>
       <SelectContent>

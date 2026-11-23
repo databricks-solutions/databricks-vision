@@ -18,6 +18,7 @@ from ..core._background import spawn_bg
 from ..core._eval import metrics_json
 from ..core._image_gen_dep import get_sp_token
 from ..models import FolderCreate, FolderOut, GeneratedImageOut
+from .style_guidelines import batch_kit_rules
 
 router = APIRouter(tags=["gallery"])
 
@@ -333,6 +334,8 @@ async def analyze_images(
 
     if not rows:
         raise HTTPException(200, "All images already analyzed and evaluated")
+    # The brand kit picked on the Batch form: the judges score each image against its rules.
+    criteria = batch_kit_rules(pool, batch_id)
 
     async def event_generator():
         total = len(rows)
@@ -348,7 +351,9 @@ async def analyze_images(
                 resp = ws.files.download(volume_path)
                 image_bytes = resp.contents.read()
 
-                analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
+                analyze_task = asyncio.create_task(
+                    _score_or_analyze(request, analyzer, image_bytes, row.get("prompt"), criteria)
+                )
                 embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
                 analysis = await analyze_task
                 try:
@@ -463,7 +468,11 @@ async def analyze_single_image(
     except Exception as exc:
         raise HTTPException(500, f"Failed to download image: {exc}") from exc
 
-    analyze_task = asyncio.create_task(_score_or_analyze(request, analyzer, image_bytes, row.get("prompt")))
+    # Batch images keep their batch's brand kit; single-image rows have none on batch_runs.
+    criteria = batch_kit_rules(pool, batch_id)
+    analyze_task = asyncio.create_task(
+        _score_or_analyze(request, analyzer, image_bytes, row.get("prompt"), criteria)
+    )
     embed_task = asyncio.create_task(asyncio.to_thread(vw.embed_image, image_bytes))
 
     analysis = embedding = None
