@@ -45,7 +45,8 @@ import {
   type EvalCriterionOut,
 } from "@/lib/api";
 import { CHECKERBOARD_STYLE, IMAGE_MODEL_STORAGE_KEY } from "@/lib/image-models";
-import { Save, Sparkles, Plus, Trash2, Pencil } from "lucide-react";
+import { ScopeChip } from "@/components/brand-kit-select";
+import { Save, Sparkles, Plus, Trash2, Pencil, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/settings")({
@@ -59,7 +60,8 @@ function SettingsPage() {
       <main className="flex-1 px-4 sm:px-6 py-6 max-w-4xl w-full mx-auto">
         <h1 className="text-2xl font-semibold mb-1">Settings</h1>
         <p className="text-sm text-muted-foreground mb-6">
-          Manage brand kits used by Compose and the analyzer, and configure default generation models.
+          Brand kits shape Compose creatives and set the rules the judges check. Eval Criteria are
+          the scores every image gets. Model Settings set the defaults for generation.
         </p>
         <Tabs defaultValue="guidelines" className="w-full">
           <TabsList>
@@ -139,7 +141,8 @@ function EvalCriteriaTab() {
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
         These five criteria score every generated image (shown as the metric grid on each image).
-        Edit the instructions to tune scoring; the Custom criterion is yours to define and is off
+        They apply with or without a brand kit; a kit's rules are judged separately and shown as
+        Brand kit rules in the image details. Edit the instructions to tune scoring; the Custom criterion is yours to define and is off
         until you enable it. Keep the <code className="text-xs bg-muted px-1 py-0.5 rounded">{"{{ trace }}"}</code> placeholder
         in the instructions — it's how the judge sees the generated image.
       </p>
@@ -280,13 +283,23 @@ function StyleGuidelinesTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          A brand kit's logo, colours and typography are applied by Compose; its rules are what the
-          judges score every image against. Kits appear in the Style guideline dropdown on the
-          Generate form — mark one as default to pre-select it.
-        </p>
-        <Button size="sm" onClick={() => setCreating(true)}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="text-sm text-muted-foreground space-y-1">
+          <p>A brand kit does two jobs:</p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>
+              <span className="font-medium text-foreground">Compose</span> puts its logo, brand
+              colours and typography into the creative.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">The judges</span> score images against
+              its rules wherever the kit is selected: Single, Edit, Adapt, Batch and Compose. The
+              rules don't change what's generated.
+            </li>
+          </ul>
+          <p>Mark one kit as default to pre-select it on the Generate page.</p>
+        </div>
+        <Button size="sm" className="shrink-0" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4 mr-1" />New
         </Button>
       </div>
@@ -294,7 +307,7 @@ function StyleGuidelinesTab() {
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {!isLoading && guidelines.length === 0 && (
         <div className="border border-dashed rounded-lg p-8 text-center text-sm text-muted-foreground">
-          No guidelines yet. Click <span className="font-medium text-foreground">New</span> to create one.
+          No brand kits yet. Click <span className="font-medium text-foreground">New</span> to create one.
         </div>
       )}
 
@@ -313,10 +326,12 @@ function StyleGuidelinesTab() {
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-line">
-                  {g.body || <span className="italic">No body</span>}
+                  <span className="font-medium text-foreground">Judges check: </span>
+                  {g.body || <span className="italic">no rules</span>}
                 </p>
                 {((g.palette ?? []).length > 0 || g.typography) && (
                   <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className="text-xs font-medium text-foreground">Compose uses:</span>
                     {(g.palette ?? []).map((colour) => (
                       <span
                         key={colour}
@@ -394,7 +409,7 @@ function StyleGuidelinesTab() {
       {/* Delete confirmation — matches the image-dialog delete pattern */}
       <Dialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
         <DialogContent>
-          <DialogTitle>Delete style guideline "{deleting?.name}"?</DialogTitle>
+          <DialogTitle>Delete brand kit "{deleting?.name}"?</DialogTitle>
           <DialogDescription>This will not affect existing images. Cannot be undone.</DialogDescription>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button>
@@ -479,18 +494,28 @@ function GuidelineDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="g-body">Guideline</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="g-body">Rules the judges check</Label>
+              <ScopeChip icon={ClipboardCheck}>Scoring</ScopeChip>
+            </div>
             <Textarea
               id="g-body"
               value={form.body}
               onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
-              placeholder="Brand colours, on-brand props, do/don't elements. The analyzer will assess every generation against this."
+              placeholder={"Do / don't rules, e.g.\n- The logo sits top-left and is never recoloured\n- Warm, natural lighting\n- No competitor products"}
               rows={8}
               className="resize-y text-xs font-mono"
             />
+            <p className="text-[11px] text-muted-foreground">
+              Every image made with this kit is scored against these rules, in every mode. They don't
+              change what's generated.
+            </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="g-palette">Brand colours</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="g-palette">Brand colours</Label>
+              <ScopeChip icon={Sparkles}>Compose only</ScopeChip>
+            </div>
             <div className="flex items-center gap-2">
               <Input
                 id="g-palette"
@@ -507,7 +532,10 @@ function GuidelineDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="g-typography">Typography</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="g-typography">Typography</Label>
+              <ScopeChip icon={Sparkles}>Compose only</ScopeChip>
+            </div>
             <Input
               id="g-typography"
               value={form.typography}
@@ -516,7 +544,7 @@ function GuidelineDialog({
             />
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Add the logo from the brand kit list after saving.
+            Logo (Compose only): add it from the brand kit list after saving.
           </p>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input
@@ -525,7 +553,7 @@ function GuidelineDialog({
               onChange={(e) => setForm((f) => ({ ...f, is_default: e.target.checked }))}
               className="rounded border-input"
             />
-            <span>Set as default (auto-applies on new generations)</span>
+            <span>Set as default (pre-selected on the Generate page)</span>
           </label>
         </div>
         <DialogFooter>

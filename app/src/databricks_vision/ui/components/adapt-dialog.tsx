@@ -3,7 +3,7 @@
  * The Generate page runs the adaptation (POST /api/adapt) and streams the results.
  */
 import { useEffect, useState } from "react";
-import { useListFormatPresets } from "@/lib/api";
+import { useListFormatPresets, type StyleGuidelineOut } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FormatChip } from "@/components/model-controls";
-import { Crop } from "lucide-react";
+import { ClipboardCheck, Crop } from "lucide-react";
 
 export type AdaptSource =
   // A fresh result on the Generate page (sent to the backend as an upload).
@@ -26,11 +26,14 @@ export function AdaptDialog({
   open,
   onOpenChange,
   onAdapt,
+  kit,
 }: {
   source: AdaptSource | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdapt: (formats: string[]) => void;
+  // The Generate page's brand kit pick: the judges score each format against its rules.
+  kit?: StyleGuidelineOut;
 }) {
   const { data } = useListFormatPresets();
   const presets = data?.data ?? [];
@@ -55,6 +58,14 @@ export function AdaptDialog({
           Re-lays out this creative for each format you pick. Text, logo, product and colours stay
           the same; the background is extended or recomposed to fit.
         </DialogDescription>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
+          {!kit
+            ? <span>No brand kit selected: each format gets the standard scores only.</span>
+            : kit.body?.trim()
+              ? <span>The judges score each format against the rules in the "{kit.name}" brand kit.</span>
+              : <span>The "{kit.name}" brand kit has no rules: each format gets the standard scores only.</span>}
+        </p>
         <div className="flex gap-4 py-2">
           {preview && (
             <img

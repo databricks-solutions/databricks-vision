@@ -8,6 +8,7 @@ import type { FolderOut, ImageModelOut, StyleGuidelineOut } from "@/lib/api";
 import { useListFormatPresets } from "@/lib/api";
 import { CHECKERBOARD_STYLE, DEFAULT_QUALITIES } from "@/lib/image-models";
 import VolumeBrowserDialog from "@/components/apx/volume-browser-dialog";
+import { BrandKitSelect } from "@/components/brand-kit-select";
 import {
   COMPLEXITY_DEFAULT,
   ComplexitySelect,
@@ -121,6 +122,8 @@ export function ComposeForm({
   imageModelId,
   onImageModelChange,
   guidelines,
+  kitId,
+  onKitChange,
   folders,
   generating,
   onSubmit,
@@ -131,6 +134,9 @@ export function ComposeForm({
   imageModelId: string;
   onImageModelChange: (id: string) => void;
   guidelines: StyleGuidelineOut[];
+  // Owned by the Generate page so Single, Compose and Adapt share one kit pick.
+  kitId: string;
+  onKitChange: (id: string) => void;
   folders: FolderOut[];
   generating: boolean;
   onSubmit: (formData: FormData, count: number) => void;
@@ -144,7 +150,6 @@ export function ComposeForm({
   const [products, setProducts] = useState<{ id: string; slot: Slot }[]>([]);
   const [logoOverride, setLogoOverride] = useState<Slot | null>(null);
   const [styleRef, setStyleRef] = useState<Slot | null>(null);
-  const [kitId, setKitId] = useState("none");
   const [format, setFormat] = useState("square");
   const [headline, setHeadline] = useState("");
   const [subheadline, setSubheadline] = useState("");
@@ -154,15 +159,6 @@ export function ComposeForm({
   const [complexity, setComplexity] = useState(COMPLEXITY_DEFAULT);
   const [n, setN] = useState(1);
   const [folder, setFolder] = useState("default");
-
-  // Pre-select the default brand kit once the list arrives.
-  const kitInitedRef = useRef(false);
-  useEffect(() => {
-    if (kitInitedRef.current || guidelines.length === 0) return;
-    kitInitedRef.current = true;
-    const dflt = guidelines.find((g) => g.is_default);
-    if (dflt) setKitId(String(dflt.id));
-  }, [guidelines]);
 
   // "Use in Compose" from the gallery drops the image into the first product slot.
   useEffect(() => {
@@ -218,22 +214,13 @@ export function ComposeForm({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label>Brand kit</Label>
-        <Select value={kitId} onValueChange={(v) => { setKitId(v); setLogoOverride(null); }}>
-          <SelectTrigger className="h-8 text-xs">
-            {/* Label rendered directly — the kit list loads async (see the style-guideline select). */}
-            <span>{kit ? kit.name : "None"}</span>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none" className="text-xs">None</SelectItem>
-            {guidelines.map((g) => (
-              <SelectItem key={g.id} value={String(g.id)} className="text-xs">
-                {g.name}{g.is_default ? " · default" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="space-y-1.5">
+        <BrandKitSelect
+          kits={guidelines}
+          value={kitId}
+          onChange={(v) => { onKitChange(v); setLogoOverride(null); }}
+          scope="compose"
+        />
         {kit && ((kit.palette ?? []).length > 0 || kit.typography) && (
           <div className="flex items-center gap-1.5">
             {(kit.palette ?? []).map((colour) => (

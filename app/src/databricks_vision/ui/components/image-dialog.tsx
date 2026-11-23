@@ -347,7 +347,7 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
                         )}
                         {brand.length > 0 && (
                           <div>
-                            <p className="text-[10px] uppercase tracking-wide text-red-600 dark:text-red-400">Brand conflicts</p>
+                            <p className="text-[10px] uppercase tracking-wide text-red-600 dark:text-red-400">Brand kit conflicts</p>
                             <ul className="list-disc list-inside text-foreground">
                               {brand.map((s, i) => <li key={i}>{s}</li>)}
                             </ul>
@@ -376,7 +376,8 @@ export function ImageDialog({ image, open, onClose, onDeleted, onFindSimilar }: 
               })()}
               {image.criteria_evaluation && (
                 <div>
-                  <p className="font-medium text-muted-foreground mb-1">Criteria evaluation</p>
+                  {/* The judges' verdict on the brand kit's rules (sent as `criteria`). */}
+                  <p className="font-medium text-muted-foreground mb-1">Brand kit rules</p>
                   <p className="text-foreground text-xs whitespace-pre-line">{image.criteria_evaluation}</p>
                 </div>
               )}
