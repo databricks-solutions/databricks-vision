@@ -10,8 +10,9 @@ from databricks_vision.backend.core._eval import (
     load_criteria,
     validate_criterion_instructions,
 )
+from image_gen import DEFAULT_LANGUAGE_MODEL
 
-MODEL = "databricks:/databricks-gpt-5-5"
+MODEL = f"databricks:/{DEFAULT_LANGUAGE_MODEL}"
 VALID = "Score the image in {{ trace }} from 0-5 with a one-sentence rationale."
 
 

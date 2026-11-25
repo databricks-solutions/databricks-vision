@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from dotenv import load_dotenv
+from image_gen import DEFAULT_IMAGE_MODEL, DEFAULT_LANGUAGE_MODEL
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -37,8 +38,9 @@ class AppConfig(BaseSettings):
     batch_gen_job_id: int = Field(default=0)
 
     # AI model settings
-    model_name: str = Field(default="databricks-gpt-5-5")
-    image_model: str = Field(default="gpt-image-2.5-flare")
+    # Defaults live in image_gen so the library, the app and the sync tests share them.
+    model_name: str = Field(default=DEFAULT_LANGUAGE_MODEL)
+    image_model: str = Field(default=DEFAULT_IMAGE_MODEL)
     embedding_endpoint: str = Field(default="siglip2-so400m-embeddings")
     default_quality: str = Field(default="auto")
     default_resolution: str = Field(default="1024x1024")
@@ -51,8 +53,10 @@ class AppConfig(BaseSettings):
     # the app falls back to the plain structured analyzer output.
     eval_experiment: str = Field(default="")
     eval_enabled: bool = Field(default=True)
-    # Judge model must be multimodal AND accept function tools; GPT-5.x require
-    # reasoning_effort='none' with tools. Defaults to databricks:/{model_name}.
+    # Judge model must be multimodal AND accept function tools with reasoning_effort='none'
+    # on /v1/chat/completions (GPT-5.x and GPT-6.1 Terra do; GPT-6.1 Sol and GPT-6 Astra
+    # reject 'none', so they can't judge). Defaults to databricks:/{model_name}, resolved at
+    # startup, so a runtime Settings change to model_name doesn't move the judges.
     judge_model: str = Field(default="")
     judge_reasoning_effort: str = Field(default="none")
     # Images are downscaled to this max edge before becoming a trace attachment,

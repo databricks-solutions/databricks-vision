@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_QUALITY = "low"
-DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare"
+# DEFAULT_IMAGE_MODEL and LLM_MODEL mirror image_gen.DEFAULT_IMAGE_MODEL / DEFAULT_LANGUAGE_MODEL
+# (this module is deployed on its own); tests/test_default_models_sync.py keeps them aligned.
+DEFAULT_IMAGE_MODEL = "gpt-image-2.6-flare"
 DEFAULT_OUTPUT_FORMAT = "png"
 DEFAULT_BACKGROUND = "opaque"
-LLM_MODEL = "databricks-gpt-5-5"
+LLM_MODEL = "databricks-gpt-6-1-terra"
 
 # Kept in sync with image_gen.MODEL_PRESETS (this module is deployed on its own and
 # can't import image_gen).

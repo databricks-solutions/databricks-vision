@@ -40,7 +40,12 @@ if TYPE_CHECKING:  # notebook-only display type; IPython is not a runtime depend
 
 EMBEDDING_DIM = 1152
 
-DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare"
+DEFAULT_IMAGE_MODEL = "gpt-image-2.6-flare"
+# Language model for everything else: it runs the Responses image_generation tool, the
+# structured analyzer, prompt rewrites and (in the app) the MLflow judges. The judges need
+# function tools with reasoning_effort='none' on /v1/chat/completions, so it must support
+# that: GPT-6.1 Terra does, GPT-6.1 Sol and GPT-6 Astra don't.
+DEFAULT_LANGUAGE_MODEL = "databricks-gpt-6-1-terra"
 # Used for background='transparent' when the selected model can't render transparency.
 TRANSPARENT_FALLBACK_MODEL = "gpt-image-1.5"
 
@@ -757,7 +762,7 @@ class ImageGen:
         self,
         workspace: VisionWorkspace,
         output_root: str,
-        reasoning_model: str = "databricks-gpt-5-5",
+        reasoning_model: str = DEFAULT_LANGUAGE_MODEL,
         image_model: str = DEFAULT_IMAGE_MODEL,
         thumb_max_width: int = 768,
         refresh_interval: float = 5.0,
@@ -1524,7 +1529,7 @@ class ImageAnalyzer:
     def __init__(
         self,
         workspace: VisionWorkspace,
-        model: str = "databricks-gpt-5-5",
+        model: str = DEFAULT_LANGUAGE_MODEL,
         openai_client: AsyncOpenAI | None = None,
     ):
         """
@@ -1725,7 +1730,7 @@ class ImageAdmin:
         self,
         workspace: VisionWorkspace,
         output_root: str,
-        reasoning_model: str = "databricks-gpt-5-5",
+        reasoning_model: str = DEFAULT_LANGUAGE_MODEL,
     ):
         self.workspace = workspace
         self.output_root = output_root.rstrip("/")

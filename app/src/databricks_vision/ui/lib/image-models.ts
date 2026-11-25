@@ -5,8 +5,9 @@ import type { ImageModelOut } from "@/lib/api";
 export const TRANSPARENT_FALLBACK_MODEL = "gpt-image-1.5";
 
 // The user's image-model pick, remembered per browser. Written by the Generate page picker
-// and by Settings → "Default image model".
-export const IMAGE_MODEL_STORAGE_KEY = "generate-image-model";
+// and by Settings → "Default image model". Renamed (was "generate-image-model") when the
+// default moved to gpt-image-2.6-flare, so every browser starts on the new default once.
+export const IMAGE_MODEL_STORAGE_KEY = "generate-image-model-v2";
 
 // batch_runs.batch_mode values that are one gallery image rather than a batch job
 // (mirrors SINGLE_IMAGE_MODES in backend/routers/gallery.py).

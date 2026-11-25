@@ -161,7 +161,7 @@ resources:
         - name: quality
           default: "low"
         - name: image_model
-          default: "gpt-image-2.5-flare"
+          default: "gpt-image-2.6-flare"  # = image_gen.DEFAULT_IMAGE_MODEL (test_default_models_sync)
         - name: output_format
           default: "png"
         - name: background
