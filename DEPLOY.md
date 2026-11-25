@@ -9,7 +9,7 @@ End-to-end guide for deploying the `databricks-vision` app to a Databricks works
 ## 1. Prerequisites
 
 ### Workspace
-- **Foundation Model serving** enabled (provides `databricks-gpt-5-5` and the `gpt-image-2.6-*` / `gpt-image-2.5-*` (flare + sunburst) / `gpt-image-2` / `gpt-image-1.5` image models).
+- **Foundation Model serving** enabled (provides `databricks-gpt-6-1-terra` and the `gpt-image-2.6-*` / `gpt-image-2.5-*` (flare + sunburst) / `gpt-image-2` / `gpt-image-1.5` image models).
 - **Databricks Apps** enabled.
 - **GPU model serving** quota (`GPU_SMALL` / A10) for the SigLIP 2 embedding endpoint.
 - **Lakebase Autoscaling Postgres** project access (you'll provision the project in step 2a if it doesn't exist).

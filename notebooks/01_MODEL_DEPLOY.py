@@ -110,7 +110,7 @@ sample = pd.DataFrame([{
     "prompt": "Replace this image with a red apple on a clean white background, studio photography",
     "size": "1024x1024",
     "quality": "low",
-    "image_model": "gpt-image-2.5-flare",
+    "image_model": "gpt-image-2.6-flare",
     "output_format": "png",
     "background": "opaque",
 }])
@@ -160,7 +160,8 @@ pip_requirements = [
 from mlflow.models.resources import DatabricksServingEndpoint
 
 resources = [
-    DatabricksServingEndpoint(endpoint_name="databricks-gpt-5-5"),
+    # Must match LLM_MODEL in image_gen_model.py, or the endpoint can't call it.
+    DatabricksServingEndpoint(endpoint_name="databricks-gpt-6-1-terra"),
 ]
 
 mlflow.set_registry_uri("databricks-uc")

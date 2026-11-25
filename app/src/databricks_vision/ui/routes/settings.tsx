@@ -578,13 +578,18 @@ function ModelSettingsTab() {
         <Select value={form.model_name ?? ""} onValueChange={(v) => setForm((f) => ({ ...f, model_name: v }))}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
+            {/* The first option is image_gen.DEFAULT_LANGUAGE_MODEL (test_default_models_sync). */}
+            <SelectItem value="databricks-gpt-6-1-terra">GPT-6.1 Terra</SelectItem>
             <SelectItem value="databricks-gpt-5-5">GPT-5.5</SelectItem>
             <SelectItem value="databricks-gpt-5-2">GPT-5.2</SelectItem>
             <SelectItem value="databricks-claude-sonnet-4-5">Claude Sonnet 4.5</SelectItem>
             <SelectItem value="databricks-meta-llama-3-3-70b-instruct">Llama 3.3 70B</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">Used for analysis and prompt enhancement.</p>
+        <p className="text-xs text-muted-foreground">
+          Runs image generation, analysis and prompt enhancement. The judges stay on the model the
+          app started with.
+        </p>
       </div>
       <div className="space-y-1.5">
         <Label>Default Image Model</Label>
